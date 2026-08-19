@@ -1,0 +1,76 @@
+# Redis 主从 + 哨兵，给 W3 的 P6 故障注入实验用。
+#
+#   用 scripts/start-ha.ps1 启动，不要直接 docker compose up ——
+#   它需要 FP_HOST_IP 这个变量，脚本会自动探测并注入。
+#
+# ---------------------------------------------------------------------------
+# 为什么所有地址都要用「宿主机 IP」而不是容器服务名
+# ---------------------------------------------------------------------------
+# Sentinel 的工作方式是：把它发现的主库地址<b>上报给客户端</b>，客户端据此去连。
+# 如果用容器服务名（redis-master）或容器内网 IP（172.18.0.4），
+# Sentinel 上报的就是这些地址 —— 而跑在 Windows 宿主机上的 Java 应用<b>解析不到、也连不通</b>。
+# 结果是 Sentinel 自己工作正常，客户端却永远拿不到能用的地址，主从切换等于没做。
+#
+# 解法是让两边都走宿主机 IP + 已映射的端口：
+#   · Sentinel 容器 → 宿主机 IP:6380 能通（Docker Desktop 允许容器访问宿主机映射端口，已实测 PONG）
+#   · 宿主机上的应用 → 宿主机 IP:6380/6381 当然能通
+# 这样 Sentinel 上报的地址对客户端就是直接可用的。
+#
+# replica-announce-ip / port 的作用：Sentinel 是通过在主库上执行 INFO replication
+# 来发现从库的，而那里显示的从库地址由从库自己 announce。不设的话它会 announce
+# 容器内网地址，Sentinel 就又发现了一个客户端连不通的从库。
+# ---------------------------------------------------------------------------
+
+services:
+  redis-master:
+    image: redis:7.4-alpine
+    container_name: fp-redis-master
+    ports:
+      - "6380:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory-policy noeviction
+      --replica-announce-ip ${FP_HOST_IP}
+      --replica-announce-port 6380
+
+  redis-replica:
+    image: redis:7.4-alpine
+    container_name: fp-redis-replica
+    depends_on:
+      - redis-master
+    ports:
+      - "6381:6379"
+    command: >
+      redis-server
+      --replicaof ${FP_HOST_IP} 6380
+      --appendonly yes
+      --maxmemory-policy noeviction
+      --replica-announce-ip ${FP_HOST_IP}
+      --replica-announce-port 6381
+
+  sentinel:
+    image: redis:7.4-alpine
+    container_name: fp-sentinel
+    depends_on:
+      - redis-master
+      - redis-replica
+    ports:
+      - "26379:26379"
+    # 哨兵需要一个可写的配置文件（它会把发现的拓扑写回去），所以启动时先生成再拉起。
+    # quorum 设成 1 因为只有一个哨兵实例；生产至少要 3 个哨兵、quorum 设 2。
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat > /tmp/sentinel.conf <<EOF
+        port 26379
+        sentinel resolve-hostnames yes
+        sentinel announce-ip ${FP_HOST_IP}
+        sentinel announce-port 26379
+        sentinel monitor fpmaster ${FP_HOST_IP} 6380 1
+        sentinel down-after-milliseconds fpmaster 3000
+        sentinel failover-timeout fpmaster 6000
+        sentinel parallel-syncs fpmaster 1
+        EOF
+        exec redis-server /tmp/sentinel.conf --sentinel

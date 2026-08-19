@@ -1,0 +1,1336 @@
+<title>FlashPilot 实验报告</title>
+
+<style>
+  :root {
+    --f-display: "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --f-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+    --f-label: "Bahnschrift SemiCondensed", "Bahnschrift", "DIN Alternate", "Roboto Condensed", "Segoe UI", sans-serif;
+    --f-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+
+    --ground: #F5F6F7;
+    --surface: #FFFFFF;
+    --surface-2: #F8FAFA;
+    --ink: #151B21;
+    --ink-2: #3D4C56;
+    --ink-3: #6B7C86;
+    --line: #D9E0E3;
+    --line-2: #EAEFF1;
+
+    --accent: #0F5C7A;
+    --accent-soft: #E7F1F5;
+    --good: #1E6B4A;
+    --good-soft: #E6F1EB;
+    --bad: #A3341F;
+    --bad-soft: #FAEBE7;
+    --warn: #8A6212;
+    --warn-soft: #F8F1DF;
+
+    --w-wide: 1180px;
+    --w-prose: 68ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D1317;
+      --surface: #141D22;
+      --surface-2: #19242A;
+      --ink: #E3EAEE;
+      --ink-2: #A4B4BC;
+      --ink-3: #78888F;
+      --line: #263338;
+      --line-2: #1D282D;
+      --accent: #5AAFCE;
+      --accent-soft: #102A36;
+      --good: #5FB98D;
+      --good-soft: #10251C;
+      --bad: #E07E68;
+      --bad-soft: #2B1712;
+      --warn: #D9A945;
+      --warn-soft: #261E0D;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D1317;
+    --surface: #141D22;
+    --surface-2: #19242A;
+    --ink: #E3EAEE;
+    --ink-2: #A4B4BC;
+    --ink-3: #78888F;
+    --line: #263338;
+    --line-2: #1D282D;
+    --accent: #5AAFCE;
+    --accent-soft: #102A36;
+    --good: #5FB98D;
+    --good-soft: #10251C;
+    --bad: #E07E68;
+    --bad-soft: #2B1712;
+    --warn: #D9A945;
+    --warn-soft: #261E0D;
+  }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: var(--w-wide); margin-inline: auto; padding-inline: clamp(20px, 5vw, 56px); }
+  .prose { max-width: var(--w-prose); }
+
+  header.mast { padding-block: clamp(36px, 6vw, 68px) 0; }
+  .eyebrow {
+    font-family: var(--f-label); font-size: 11.5px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0;
+  }
+  h1 {
+    font-family: var(--f-display); font-weight: 650;
+    font-size: clamp(30px, 4.8vw, 48px); line-height: 1.08;
+    letter-spacing: -0.02em; margin: 16px 0 0; text-wrap: balance;
+  }
+  h1 .zh {
+    display: block; font-size: clamp(16px, 2.3vw, 21px); font-weight: 500;
+    letter-spacing: 0.01em; color: var(--ink-2); margin-top: 13px; line-height: 1.5;
+  }
+  .thesis { max-width: 62ch; margin: 22px 0 0; font-size: 17.5px; color: var(--ink-2); }
+  .thesis strong { color: var(--ink); font-weight: 600; }
+
+  .kpis {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 36px;
+  }
+  .kpi { background: var(--surface); padding: 15px 17px 17px; }
+  .kpi dt {
+    font-family: var(--f-label); font-size: 11px; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .kpi dd {
+    margin: 6px 0 0; font-family: var(--f-display); font-size: 24px; font-weight: 650;
+    letter-spacing: -0.015em; line-height: 1.1; font-variant-numeric: tabular-nums;
+  }
+  .kpi dd small {
+    display: block; font-family: var(--f-body); font-size: 12.5px; font-weight: 400;
+    color: var(--ink-3); margin-top: 5px; letter-spacing: 0; line-height: 1.45;
+  }
+  .kpi.g dd { color: var(--good); }
+  .kpi.a dd { color: var(--accent); }
+
+  nav.toc { margin-top: 40px; border-top: 1px solid var(--line); padding-top: 18px; }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 5px 22px; font-size: 14px; }
+  nav.toc a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid transparent; }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+  nav.toc .n { font-family: var(--f-label); font-size: 11px; letter-spacing: 0.1em; color: var(--ink-3); margin-right: 5px; }
+
+  section { padding-block: clamp(44px, 6vw, 74px) 0; }
+  .head { border-top: 2px solid var(--ink); padding-top: 15px; margin-bottom: 26px; }
+  h2 {
+    font-family: var(--f-display); font-weight: 650; font-size: clamp(23px, 3.1vw, 30px);
+    line-height: 1.22; letter-spacing: -0.012em; margin: 8px 0 0; text-wrap: balance;
+  }
+  .sub { margin: 12px 0 0; max-width: var(--w-prose); color: var(--ink-2); font-size: 16.5px; }
+  h3 { font-family: var(--f-display); font-weight: 620; font-size: 19px; line-height: 1.4; margin: 34px 0 10px; letter-spacing: -0.005em; }
+  h4 { font-family: var(--f-label); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 24px 0 8px; font-weight: 600; }
+  p { margin: 0 0 15px; }
+  .prose ul, .prose ol { margin: 0 0 16px; padding-left: 22px; }
+  .prose li { margin-bottom: 6px; }
+
+  code { font-family: var(--f-mono); font-size: 0.88em; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 3px; padding: 1px 5px; }
+  pre { margin: 18px 0 20px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 16px 18px; overflow-x: auto; font-size: 13px; line-height: 1.65; font-family: var(--f-mono); }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+  .tscroll { overflow-x: auto; margin: 20px 0 8px; border: 1px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; background: var(--surface); font-size: 14.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+  thead th {
+    background: var(--surface-2); font-family: var(--f-label); font-size: 11.5px;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3);
+    font-weight: 600; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .up { color: var(--good); font-weight: 600; }
+  .down { color: var(--bad); font-weight: 600; }
+  .flat { color: var(--ink-3); }
+  .pill {
+    display: inline-block; font-family: var(--f-label); font-size: 11px;
+    letter-spacing: 0.09em; text-transform: uppercase; padding: 2px 8px;
+    border: 1px solid currentColor; white-space: nowrap;
+  }
+  .pill.ok { color: var(--good); background: var(--good-soft); }
+  .pill.no { color: var(--bad); background: var(--bad-soft); }
+  .pill.wn { color: var(--warn); background: var(--warn-soft); }
+  caption {
+    caption-side: bottom; text-align: left; padding: 10px 14px; font-size: 13px;
+    color: var(--ink-3); background: var(--surface-2); border-top: 1px solid var(--line);
+  }
+
+  .bugs { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 24px; }
+  .bug { background: var(--surface); padding: 22px clamp(18px, 2.2vw, 26px) 24px; }
+  .bug > .id { font-family: var(--f-label); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-3); }
+  .bug h3 { margin: 5px 0 14px; font-size: 20px; }
+  .bug dl { display: grid; grid-template-columns: 78px 1fr; gap: 9px 18px; margin: 0; font-size: 14.8px; }
+  .bug dt { font-family: var(--f-label); font-size: 11px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-3); padding-top: 5px; font-weight: 600; }
+  .bug dd { margin: 0; color: var(--ink-2); }
+  .bug dd strong { color: var(--ink); }
+  .bug dd.verify { color: var(--good); }
+  @media (max-width: 620px) {
+    .bug dl { grid-template-columns: 1fr; gap: 1px 0; }
+    .bug dt { padding-top: 11px; }
+  }
+
+  .note { border: 1px solid var(--line); border-left: 3px solid var(--warn); background: var(--surface); padding: 17px 20px; margin: 22px 0; font-size: 15.5px; }
+  .note.hard { border-left-color: var(--bad); }
+  .note.good { border-left-color: var(--good); }
+  .note > b { font-family: var(--f-label); font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 6px; }
+  .note.hard > b { color: var(--bad); }
+  .note.good > b { color: var(--good); }
+  .note p:last-child { margin-bottom: 0; }
+
+  .resume { background: var(--surface); border: 1px solid var(--line); padding: clamp(20px, 3vw, 30px); margin-top: 24px; }
+  .resume .rt { font-family: var(--f-display); font-weight: 650; font-size: 18px; margin: 0 0 4px; }
+  .resume .rm { font-size: 13.5px; color: var(--ink-3); margin: 0 0 20px; font-family: var(--f-mono); }
+  .resume ul { list-style: none; margin: 0; padding: 0; }
+  .resume ul li { position: relative; padding-left: 19px; margin-bottom: 15px; font-size: 15.2px; line-height: 1.72; color: var(--ink-2); }
+  .resume ul li::before { content: ""; position: absolute; left: 2px; top: 12px; width: 7px; height: 1px; background: var(--accent); }
+  .resume ul li strong { color: var(--ink); }
+  .real { color: var(--accent); font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  details { background: var(--surface); border: 1px solid var(--line); border-bottom: 0; }
+  .qgroup details:last-of-type { border-bottom: 1px solid var(--line); }
+  summary { cursor: pointer; padding: 12px 18px 12px 40px; font-size: 15.4px; font-weight: 550; color: var(--ink); position: relative; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "+"; position: absolute; left: 18px; top: 11px; font-family: var(--f-mono); font-size: 15px; color: var(--accent); }
+  details[open] summary::before { content: "\2212"; }
+  details[open] summary { border-bottom: 1px solid var(--line-2); }
+  summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  details .ans { padding: 15px 18px 19px 40px; font-size: 15px; color: var(--ink-2); }
+  details .ans p { margin: 0 0 11px; }
+  details .ans p:last-child { margin-bottom: 0; }
+  details .ans strong { color: var(--ink); }
+  details .ans ul { margin: 0 0 11px; padding-left: 19px; }
+  details .ans li { margin-bottom: 5px; }
+
+  footer { margin-top: clamp(50px, 7vw, 84px); border-top: 2px solid var(--ink); padding: 20px 0 56px; font-size: 14px; color: var(--ink-3); }
+  a { color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<header class="mast">
+  <div class="wrap">
+    <p class="eyebrow">医院预约挂号 · 压测与混沌实验 · 2026-08-16 至 08-17</p>
+    <h1>FlashPilot 实验报告
+      <span class="zh">放号洪峰下的号源正确性、自治控制面与黄牛识别</span>
+    </h1>
+    <p class="thesis">
+      六个压力画像、五十一个已修复缺陷、四组 A/B 对比、一百四十六个回归测试。
+      <strong>这份报告的价值不在绝对吞吐，而在每一个数字都能说出它是怎么测出来的、改了什么才变成这样。</strong>
+      所有数据来自单机 Docker 环境，配置写在附录里。
+    </p>
+
+    <div class="note hard">
+      <b>本报告已修订一次 · 2026-08-17</b>
+      <p>
+        原「黄牛产出下降 70%」是<strong>错的</strong>，已修正为随攻击强度变化的标定曲线（第 05 节）。
+        根因是风控的 Count-Min Sketch 噪声底远高于判据阈值，噪声既抬高了对黄牛的压制、
+        也在同时误判所有正常患者。<strong>把一个自己发过的数字标为错误并说清为什么，
+        比让它继续挂在报告上有价值。</strong>完整叙事见第 07 节 Narrative 07。
+      </p>
+      <p>
+        其余数字不受影响：P1–P6 画像与 AIMD／哨兵两组 A/B 都采集于风控上线<i>之前</i>，
+        不存在这条污染路径。这一点是靠时间戳核对确认的，不是推测。
+      </p>
+    </div>
+
+    <dl class="kpis">
+      <div class="kpi a"><dt>压力画像</dt><dd>6 / 6<small>含 4 类故障注入</small></dd></div>
+      <div class="kpi g"><dt>已修复缺陷</dt><dd>51<small>每个都有可复现根因</small></dd></div>
+      <div class="kpi g"><dt>控制律修复后成交</dt><dd>+27.7%<small>同参数、同延迟水平</small></dd></div>
+      <div class="kpi g"><dt>黄牛产出下降</dt><dd>35→67%<small>随攻击强度上升，且零误判</small></dd></div>
+      <div class="kpi g"><dt>主从切换丢写</dt><dd>14% → 0.6%<small>接入哨兵客户端后</small></dd></div>
+      <div class="kpi a"><dt>号段命中率</dt><dd>95.2%<small>扣减请求不打 Redis 的比例</small></dd></div>
+      <div class="kpi a"><dt>回归测试</dt><dd>146<small>只测纯逻辑与「坏了不报错」的不变量</small></dd></div>
+    </dl>
+
+    <nav class="toc" aria-label="目录">
+      <ol>
+        <li><span class="n">01</span><a href="#scene">应用场景</a></li>
+        <li><span class="n">02</span><a href="#arch">分层与映射</a></li>
+        <li><span class="n">03</span><a href="#profiles">六个压力画像</a></li>
+        <li><span class="n">04</span><a href="#loop">业务闭环验证</a></li>
+        <li><span class="n">05</span><a href="#risk">风控对照实验</a></li>
+        <li><span class="n">06</span><a href="#ab">控制律与哨兵 A/B</a></li>
+        <li><span class="n">07</span><a href="#bugs">五十一个缺陷</a></li>
+        <li><span class="n">08</span><a href="#cv">简历文案</a></li>
+        <li><span class="n">09</span><a href="#qa">面试问答</a></li>
+        <li><span class="n">10</span><a href="#reconcile">对账补偿</a></li>
+        <li><span class="n">11</span><a href="#gaps">已知缺陷</a></li>
+      </ol>
+    </nav>
+  </div>
+</header>
+
+<section id="scene">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">01 / Domain</p>
+      <h2>应用场景：为什么是挂号，以及它为什么需要这套东西</h2>
+      <p class="sub">
+        面试官的第一个问题永远是「这个系统给谁用」。所以这一节放在最前面。
+      </p>
+    </div>
+
+    <div class="prose">
+      <p>
+        放号是真实存在的瞬时洪峰：各医院普遍在固定时刻（6:00 / 7:00 / 提前 7 天）统一放号，
+        几万人在同一秒争抢几十个专家号。这个场景对系统的要求和电商秒杀几乎一致，<strong>但约束更硬</strong>：
+        超卖意味着现场多一个挂不上号的病人，少卖意味着公共医疗资源被白白浪费。
+      </p>
+
+      <div class="tscroll">
+        <table>
+          <caption>七条业务约束，每一条都对应一个具体机制。这张表是「为什么需要这么复杂」的完整回答。</caption>
+          <thead>
+            <tr><th>挂号的业务约束</th><th>技术要求</th><th>对应机制</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>同一排班内的号<strong>完全可互换</strong>（都是李医生周三上午的专家号）</td>
+              <td>库存单位可互换</td><td>三层库存 / 桶间借调 / 本地号段</td>
+            </tr>
+            <tr><td><strong>超卖不可接受</strong></td><td>强正确性</td><td>五条可执行等式 + MySQL 条件更新兜底</td></tr>
+            <tr><td><strong>少卖同样不可接受</strong>（号源浪费）</td><td>双向校验</td><td>号段租约 + 过期回收</td></tr>
+            <tr><td>实名制，一人一号，<strong>但退号后要能重约</strong></td><td>条件唯一约束</td><td>生成列模拟 partial index</td></tr>
+            <tr><td><strong>未支付要放回号池</strong></td><td>预占超时释放</td><td>复用租约归还机制</td></tr>
+            <tr><td><strong>黄牛必须挡，但不能误伤患者</strong></td><td>实时风控 + 软处置</td><td>本地 CMS 三层判据 + 慢车道</td></tr>
+            <tr><td>调参要能<strong>向运营解释</strong></td><td>决策可解释</td><td>L1 Agent 的自然语言归因</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note good">
+        <b>为什么排除了票务选座</b>
+        <p>
+          票务的域更丰富，但<strong>座位不可互换</strong>——A5 不能借调给想要 B3 的人。
+          这会废掉整套已经验证过的三层库存与桶间借调。挂号的号源在排班维度可互换、
+          具体就诊时间是<i>发号后分配</i>的，所以既有真实业务复杂度，又保住了引擎前提。
+          这个取舍本身就是一次架构判断。
+        </p>
+      </div>
+
+      <h4>三类岗位的不同讲法</h4>
+      <ul>
+        <li><strong>业务后端</strong>：场景是限量号源的放号洪峰。核心是三层库存把 95% 的扣减挡在 Redis 之外，同时用五条可执行等式保证正确性——这套等式真的抓到过 bug。</li>
+        <li><strong>中间件 / 平台 / SRE</strong>：解决的是大促当天限流阈值靠人盯盘手调。做完发现真正难的是控制律：第一版因为判据看积压水位不看趋势，阈值被砍了 73 倍。</li>
+        <li><strong>AI / Agent</strong>：关心的是让 LLM 能改生产参数而不出事。数据面完全没有 LLM，所有提案必须过白名单、钳制、dry-run、审计、回滚，Agent 挂掉自动退化为纯规则。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">02 / Layering</p>
+      <h2>引擎与业务域分离</h2>
+      <p class="sub">
+        引擎不该知道自己在卖号还是卖鞋。接口收窄成两个概念，
+        这样同一套验证过的代码换个域就能跑限量首发或选课。
+      </p>
+    </div>
+
+    <div class="prose">
+      <pre><code>clinic 业务域   医院/科室/医生/排班/患者/预约单 · 六状态机 · 超时释放 · 退号 · 风控
+      │
+      │  poolId（库存池 = 排班 ID）   holderId（竞争者 = 患者 ID）
+      ▼
+inventory 引擎   三层库存 · 桶间借调 · 号段租约 · Lua 原子扣减 · Stream 削峰 · 一致性校验
+      │
+      ▼
+control plane    L0 AIMD 规则 · L1 Agent · 护栏五件套 · 热配置</code></pre>
+
+      <p>
+        分离动作本身是一次 223 处、22 个文件的机械重命名（<code>itemId → poolId</code>、
+        <code>userId → holderId</code>），编译器全量校验，风险低但收益是引擎变成真正可复用的组件。
+      </p>
+
+      <div class="note good">
+        <b>整个升级里最优雅的一处复用</b>
+        <p>
+          引擎的租约本来解决「实例宕机后，它手里未售的本地号段必须还回桶」。
+          业务侧的「患者预占了号但没付钱，必须还回池子」是<strong>同一个形状的问题</strong>——
+          差别只在持有者从「应用实例」变成「预约单」，续约从「心跳」变成「支付」。
+          所以两者共用同一套归还 Lua，只是多一类 holder：
+          <code>instance:&lt;id&gt;</code> 和 <code>appt:&lt;id&gt;</code>。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="profiles">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">03 / Evidence</p>
+      <h2>六个压力画像，四个是故意制造不顺利的</h2>
+      <p class="sub">
+        跑通压测只能证明「顺利的时候没问题」。这六个画像的价值在于<strong>各自逼出了一个机制</strong>——
+        如果那段代码是死的，对应的数字就不会出现。
+      </p>
+    </div>
+
+    <div class="tscroll">
+      <table>
+        <caption>
+          参数各行不同（探索过程中逐步加大号源与时长），纵向不可直接比较；
+          每一行看它自己的「关键观测」。五条等式指：不超卖、不少卖、号源守恒、链路守恒、交叉校验。
+        </caption>
+        <thead>
+          <tr><th>画像</th><th>制造方式</th><th class="num">服务端 P99</th><th>关键观测</th><th>五条等式</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>P1 恒定高压</strong></td><td>200 并发持续加压</td><td class="num">24.0 ms</td>
+            <td>基线。60 秒成交 <span class="real">182,241</span>，号段命中率 95.2%</td>
+            <td><span class="pill ok">全过</span></td>
+          </tr>
+          <tr>
+            <td><strong>P2 脉冲</strong></td><td>并发在极短时间内拉满</td><td class="num">52.0 ms</td>
+            <td>P99 是六个里最高的——脉冲是延迟最坏场景，符合预期</td>
+            <td><span class="pill ok">全过</span></td>
+          </tr>
+          <tr>
+            <td><strong>P3 热点倾斜</strong></td><td>流量集中打少数桶</td><td class="num">19.5 ms</td>
+            <td><strong>借调 <span class="real">540</span> 次</strong>，桶倾斜度 1.338——桶间借调真的在工作</td>
+            <td><span class="pill ok">全过</span></td>
+          </tr>
+          <tr>
+            <td><strong>P4 慢依赖</strong></td><td>压测中途冻结 MySQL 10 秒</td><td class="num">19.5 ms</td>
+            <td><strong>积压冲到 <span class="real">90,785</span> 条</strong>，控制面把放行从 20000 砍到 3361；MySQL 恢复后排空</td>
+            <td><span class="pill ok">全过</span></td>
+          </tr>
+          <tr>
+            <td><strong>P5 节点故障</strong></td><td>压测中途 kill 掉持有号段的实例</td><td class="num">—</td>
+            <td><strong>租约回收 <span class="real">10</span> 个本会变成少卖的号源</strong>；压测器观测 933 次失败，证明故障确实落在窗口内</td>
+            <td><span class="pill ok">全过</span></td>
+          </tr>
+          <tr>
+            <td><strong>P6 主从切换</strong></td><td>哨兵强制 failover</td><td class="num">27.0 ms</td>
+            <td><strong>Redis 丢弃 0.6% 流数据，MySQL 预约零丢失</strong>；客户端跟随切换，消费端全程存活</td>
+            <td><span class="pill wn">按预期失败</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <h3>接入业务域后没有退化</h3>
+      <div class="tscroll">
+        <table>
+          <caption>同参数（200 并发 / 60 秒 / 30 万号源 / 8 桶）对比。业务域加了六状态机、条件唯一约束、生成列索引。</caption>
+          <thead>
+            <tr><th>指标</th><th class="num">抽象商品域</th><th class="num">挂号域</th><th>方向</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>60 秒成交</td><td class="num">171,095</td><td class="num">182,241</td><td class="up">↑ 6.5%</td></tr>
+            <tr><td>服务端 P99</td><td class="num">26.0 ms</td><td class="num">24.0 ms</td><td class="up">↓ 7.7%</td></tr>
+            <tr><td>号段命中率</td><td class="num">0.9524</td><td class="num">0.9524</td><td class="flat">不变</td></tr>
+            <tr><td>五条等式</td><td>通过</td><td>通过</td><td class="flat">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        我原本担心 <code>active_key</code> 那个 STORED 生成列加 VARCHAR(96) 唯一索引会拖慢批量插入，
+        <strong>实测证伪</strong>：P99 反而略降。原因是业务字段的插入开销被批量落库摊掉了，
+        而瓶颈本来就在同一行的行锁竞争，不在索引。
+      </p>
+
+      <div class="note good">
+        <b>P6 为什么「按预期失败」是好结果</b>
+        <p>
+          校验器报了链路守恒不通过，并且<strong>说出了故障的名字</strong>：
+          「Redis 丢写：MySQL 有 179759 笔预约，Redis 流里只剩 178611 条，
+          差 1148 条被主从切换丢弃 —— 预约未丢，账本在 MySQL」。
+        </p>
+        <p>
+          这正是架构取舍被实测验证：<strong>Redis 异步复制在切换时必然丢写，
+          所以它只能当预扣器和缓冲，账本必须是 MySQL。</strong>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="loop">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">04 / Business Loop</p>
+      <h2>业务闭环：从抢号到退号的六状态机</h2>
+      <p class="sub">
+        这是「完整项目」相对「压测 demo」最关键的补齐。没有超时释放，
+        所有没付钱的人都白占着号，号池会被慢慢耗空而实际一个都没卖出去。
+      </p>
+    </div>
+
+    <div class="prose">
+      <pre><code>[抢号成功] → PENDING_PAY ──支付──→ BOOKED ──就诊──→ COMPLETED
+                  │                   │
+                  │超时(10min)         ├─退号─→ REFUNDED    归还号源
+                  ↓                   └─过期未就诊─→ NO_SHOW  不归还，计违约
+              EXPIRED  归还号源</code></pre>
+
+      <div class="tscroll">
+        <table>
+          <caption>归还号源的三条路径。NO_SHOW 不归还是这个垂类必须想清楚的一点。</caption>
+          <thead><tr><th>状态转移</th><th>触发</th><th>归还号源</th><th>为什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>PENDING_PAY → EXPIRED</code></td><td>3 秒定时扫描</td><td><span class="pill ok">归还</span></td><td>最常见，占绝大多数</td></tr>
+            <tr><td><code>BOOKED → REFUNDED</code></td><td>患者主动退号</td><td><span class="pill ok">归还</span></td><td>有时限与退费规则</td></tr>
+            <tr><td><code>BOOKED → NO_SHOW</code></td><td>就诊时段结束扫描</td><td><span class="pill no">不归还</span></td><td>号源价值是「某时间点某医生的接诊能力」，时间过了就消失了，还回池子也没人能用。这和电商退货回库语义完全不同</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>闭环实测（50 号源小池，逐步走完状态机）</h4>
+      <pre><code>抢 5 个号            号源守恒  50 == 26(桶) + 19(实例持有) + 5(占号预约) + 0
+支付 1 个            桶不变（号本来就被这张单占着）
+退号 1 个            桶 26 → 27，占号 5 → 4
+超时释放剩余 4 个     PENDING_PAY 4 → EXPIRED 4，占号 0，守恒残差 0</code></pre>
+
+      <div class="note">
+        <b>顺序不能反：先改 MySQL 状态，再还 Redis 号源</b>
+        <p>
+          反了会超卖：先把号还回池子、还没改状态时进程挂掉，号被别人抢走，
+          而这张单在数据库里仍是 <code>PENDING_PAY</code> —— 一个号卖了两次。
+        </p>
+        <p>
+          正确顺序的失败模式只是少卖，而少卖有兜底：等式③ 会报出残差，对账能把差额加回去。
+          <strong>在「可能超卖」和「可能少卖」之间，永远选可能少卖。</strong>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="risk">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">05 / Anti-Scalper</p>
+      <h2>风控对照实验：零误判，压制强度随攻击强度上升</h2>
+      <p class="sub">
+        风控在 3 万 req/s 的热路径上，而这条路径的全部意义就是避免网络往返。
+        所以判据必须<strong>纯本地、O(1)、零分配</strong>。
+        这一节也是全报告唯一被<strong>推翻重测</strong>过的一节。
+      </p>
+    </div>
+
+    <div class="prose">
+      <h4>为什么用 Count-Min Sketch</h4>
+      <ul>
+        <li><code>HashMap&lt;String, Counter&gt;</code>：几十万 key 就是几十万次分配，放号高峰 key 空间突然膨胀，GC 压力直接打到热路径；</li>
+        <li>Redis 计数：每请求一次 RTT，把本地号段省下的 RTT 又加回来了；</li>
+        <li><strong>CMS</strong>：内存固定（4 × 65536 双缓冲，三个 sketch 共 12MB），O(1) 读写，零分配。</li>
+      </ul>
+      <p>
+        代价是<strong>它会高估</strong>。所以判据只能是「超阈值就<i>怀疑</i>」，
+        不能直接拉黑——高估意味着会冤枉真实患者。
+      </p>
+
+      <div class="note hard">
+        <b>高估不是「一点点」，它有确定的量级</b>
+        <p>
+          任意 key 的估计值天然含有约 <strong>窗口内事件总数 ÷ width</strong> 个别人的计数，
+          因为每一行的 width 个计数器要分摊窗口内所有事件。这个数是<strong>噪声底</strong>，
+          而<strong>阈值必须远大于它，否则判据恒真</strong>。
+        </p>
+        <p>
+          第一版 width=8192、窗口跨 20 秒，压测 27,666 req/s 打进来 → 约 55 万事件 →
+          噪声底 ≈ <strong>67</strong>，而阈值是 <strong>3</strong>。
+          于是 55 万个请求<b>每一个</b>都被判成高频，全部降权进 20/s 的慢车道。
+        </p>
+        <p>
+          更根本的一点：<strong>CMS 适合找「占总量一定比例的重头」，不适合判定绝对小数。</strong>
+          阈值 3 相对 55 万总量是 0.0005%，任何亚线性草图都分辨不出这个量级。
+          现在 width 加大 8 倍，并在估计值里<strong>减掉噪声底</strong>（count-mean-min 修正）；
+          看板直接暴露 <code>cmsNoiseFloor</code> 和 <code>criteriaHealthy</code>（噪声底 × 3 &lt; 阈值），
+          因为判据失效时成交数和误拒率都看不出来。
+        </p>
+      </div>
+
+      <div class="tscroll">
+        <table>
+          <caption>
+            <code>scripts/risk-ab.ps1</code>，阈值 3、设备阈值 15、慢车道 20/s，主限流放开以排除干扰。
+            A 组固定为 50 个正常患者各自设备各 1 次；B 组是同一台设备代抢 N 个患者。
+          </caption>
+          <thead>
+            <tr><th>黄牛请求量</th><th class="num">A 组成交率</th><th class="num">A 组误判</th><th class="num">B 组成交率</th><th class="num">压制幅度</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>40</td><td class="num"><span class="up">100%</span></td><td class="num"><span class="up">0 条</span></td>
+                <td class="num">65%</td><td class="num"><span class="down">35 pt</span></td></tr>
+            <tr><td>100</td><td class="num"><span class="up">100%</span></td><td class="num"><span class="up">0 条</span></td>
+                <td class="num">42%</td><td class="num"><span class="down">58 pt</span></td></tr>
+            <tr><td>200</td><td class="num"><span class="up">100%</span></td><td class="num"><span class="up">0 条</span></td>
+                <td class="num">33%</td><td class="num"><span class="down">67 pt</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        <strong>压制强度随攻击强度上升，而误判恒为零。</strong>
+        这比一个孤立的百分比更有说服力——它说明防御方向是对的：越用力刷，被压得越狠。
+        也正因为它是一条曲线而不是一个点，才能看出下面这个结构性限制。
+      </p>
+
+      <div class="note">
+        <b>为什么前 15 个请求必然放过 —— 这是能力边界，不是 bug</b>
+        <p>
+          设备阈值 = 阈值 3 × <code>DEVICE_PATIENT_LIMIT</code> 5 = 15。
+          <strong>任何基于频次的检测器都必须先观察够样本才能判断</strong>，这段「宽限期」是结构性的。
+        </p>
+        <p>
+          想缩短它就得降低设备阈值，而一家五口共用一台手机、每人刷三次<strong>正好是 15 次</strong>——
+          降下去就会伤到他们，而误判真实患者恰恰是这套设计最不能接受的失败方向。
+          <strong>要真正关掉这个窗口，得换信号</strong>（设备指纹信誉、账号年龄、实名核验），
+          而不是继续调频次阈值。把这条边界说清楚，比给一个漂亮的单点数字更接近工程事实。
+        </p>
+      </div>
+
+      <p>命中理由是可读的，运营能直接看懂：</p>
+      <pre><code>设备频次 200 超设备阈值 15，而该患者在此设备上仅 1 次，疑似一机多号批量代抢</code></pre>
+
+      <div class="note good">
+        <b>处置刻意是「降权」不是「硬拒」</b>
+        <p>
+          挂号场景里误判一个真实患者的代价极高——可能是急需就诊的老人，被拒之后不会重试、
+          也不会投诉，只是挂不上号。而放过一个黄牛的代价是一个号源被倒卖。
+          两者严重程度不对称，所以命中风控的请求走<strong>慢车道</strong>：
+          仍然能抢，只是绝对速率被压到 20/s——攻击量越大，能挤过去的比例越低。
+        </p>
+        <p>
+          只有<strong>失约黑名单</strong>（累计 3 次失约限制预约 30 天）才会真正拒绝，
+          而那个判据来自持久化的行为历史，不是瞬时频次估计。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="ab">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">06 / Before & After</p>
+      <h2>两组 A/B：改动到底值多少</h2>
+      <p class="sub">
+        画像证明「机制在工作」，A/B 证明「<strong>改动带来了可量化的收益</strong>」——
+        同参数、同环境，只动一个变量。
+      </p>
+    </div>
+
+    <h3>A 组 · AIMD 控制律：从超调到收敛</h3>
+    <p class="prose">
+      症状是限流阈值从 20000 崩到 275（73 倍）、误拒率 99.2%、连续 12 次降速零次上调。
+      根因是降速判据只看积压的<strong>水位</strong>，而控制周期 1 秒、积压排空要几十秒——
+      <strong>执行器比被控对象快 30 倍</strong>，于是对着一个已经在下降的信号疯狂过度修正。
+    </p>
+
+    <div class="tscroll">
+      <table>
+        <caption>三轮均为 200 并发 / 60 秒 / 30 万号源 / 8 桶，同机连续跑。v2 把积压判据从水位改成趋势。</caption>
+        <thead>
+          <tr><th>指标</th><th class="num">修复前</th><th class="num">v1 下限+快恢复</th><th class="num">v2 趋势判据</th><th>方向</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>降速次数</td><td class="num">12</td><td class="num">9</td><td class="num">5</td><td class="up">↓ 58%</td></tr>
+          <tr><td>上调次数</td><td class="num">0</td><td class="num">2</td><td class="num">5</td><td class="up">从零到有</td></tr>
+          <tr><td>阈值最低点</td><td class="num">275</td><td class="num">1,000</td><td class="num">3,294</td><td class="up">↑ 12 倍</td></tr>
+          <tr><td>误拒率峰值</td><td class="num">0.992</td><td class="num">0.971</td><td class="num">0.919</td><td class="up">↓ 7.3pp</td></tr>
+          <tr><td><strong>60 秒成交</strong></td><td class="num">134,027</td><td class="num">140,484</td><td class="num"><strong>171,095</strong></td><td class="up">↑ 27.7%</td></tr>
+          <tr><td>服务端 P99</td><td class="num">27.0 ms</td><td class="num">25.5 ms</td><td class="num">26.0 ms</td><td class="flat">基本不变</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="prose">
+      <strong>成交 +27.7% 而 P99 基本不变</strong>——这是消除超调最干净的收益表达：
+      不是用延迟换吞吐，而是把本来白白浪费的容量拿回来了。
+    </p>
+
+    <h3>B 组 · 主从切换：直连 vs 哨兵客户端</h3>
+    <p class="prose">
+      直连配置下，切换后应用仍连着旧主库（已降级为只读副本）。而 <code>XREADGROUP</code> 是写命令，
+      在副本上必然失败——<strong>消费端永久停摆，而应用健康检查一切正常</strong>。
+    </p>
+
+    <div class="tscroll">
+      <table>
+        <caption>两轮均 200 并发 / 20 万号源。<strong>时长不同</strong>（直连 60s、哨兵 90s），成交量不可直接比；可比的是异常数、丢写率、消费端状态、P99。</caption>
+        <thead><tr><th>指标</th><th class="num">直连</th><th class="num">哨兵客户端</th><th>方向</th></tr></thead>
+        <tbody>
+          <tr><td>压测器观测异常</td><td class="num">22,536</td><td class="num">298</td><td class="up">↓ 98.7%</td></tr>
+          <tr><td><strong>Redis 丢写</strong></td><td class="num">20,685（14%）</td><td class="num">1,148（0.6%）</td><td class="up">↓ 23 倍</td></tr>
+          <tr><td>消费端状态</td><td>永久死亡，63,126 条卡住</td><td>全程存活</td><td class="up">修复</td></tr>
+          <tr><td>服务端 P99</td><td class="num">49.5 ms</td><td class="num">27.0 ms</td><td class="up">↓ 45%</td></tr>
+          <tr><td>日志行数</td><td class="num">1,774</td><td class="num">228</td><td class="up">↓ 87%</td></tr>
+          <tr><td>PEL 残留自愈</td><td class="num">4.75 小时</td><td class="num">75 秒</td><td class="up">↓ 228 倍</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <b>这个修复里最值钱的一小时</b>
+      <p>
+        接哨兵的真正障碍不是 Spring 配置，而是 <strong>Docker 下哨兵默认上报容器内网 IP</strong>
+        （<code>172.18.0.4</code>），而跑在 Windows 宿主机上的应用解析不到、也连不通。
+        症状极其隐蔽：<strong>哨兵自己一切正常、切换也确实发生了，客户端却永远拿不到能用的地址。</strong>
+      </p>
+      <p>
+        解法是让所有地址都走宿主机 IP，并且脚本必须做一次
+        <strong>「客户端视角验证」</strong>——从宿主机去问哨兵要地址，再直接连一次。
+        没有这一步，你会得到一套看起来完全健康的哨兵集群和一个不跟随切换的客户端。
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="bugs">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">07 / Defects</p>
+      <h2>五十一个缺陷</h2>
+      <p class="sub">
+        <strong>其中 8 个是我在修别的 bug 时引入的</strong>——这类「修复引入的缺陷」不该藏起来，
+        它们恰好是最能说明验证机制有效的证据。
+      </p>
+    </div>
+
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>类别</th><th class="num">数量</th><th>典型缺陷</th></tr></thead>
+        <tbody>
+          <tr><td><strong>校验器本身</strong></td><td class="num">9</td>
+            <td>用 XPENDING 当排空判据导致<strong>假通过</strong>；算出负数；无法区分故障模式；等式③ 在新域算法失效；等式⑤ 混比当前量与累计量；<strong>等式⑤ 的展示判据与 <code>passed</code> 字段用了两套标准</strong>（五条全显示通过而 passed=false）；累计量组在没走 preheat 时口径不可比却报不一致；<strong>累计量组拿「一个号池的行数」比「所有号池的事件数」</strong>（Stream 是单条全局设计，压测时只有一个池有流量所以一直没暴露，在演示排班上挂<b>一个</b>号就立刻报不一致）；<strong>等式③⑤ 与超时释放任务存在采样竞态</strong>（归还是「先改状态、再还号源」两步，在途期间做非原子多点采样必然差几个，被报成「号源凭空消失」）</td></tr>
+          <tr><td><strong>消费端</strong></td><td class="num">6</td>
+            <td>监听容器静默取消订阅且不自愈；僵尸消费者累积；看门狗重建时泄漏连接；PEL 自愈要 4.75 小时</td></tr>
+          <tr><td><strong>控制面</strong></td><td class="num">4</td>
+            <td>积压判据看水位不看趋势导致严重超调；放行阈值无下限；P99 作为健康信号是循环论证；新参数没登记默认值导致控制面看不见</td></tr>
+          <tr><td><strong>数据面正确性</strong></td><td class="num">7</td>
+            <td>售罄状态缓存无 TTL；物理桶数随配置变化导致库存失联；<strong>归还号源落到非活跃桶</strong>；<code>booked_slots</code> 漏减导致永久漂移；<strong>放号先推 Redis 再记账</strong>（记账带上限条件，被拒时号已进桶 = 超卖暴露）；实验重置漏清 <code>released_slots</code> 导致排班永久放不出号；<strong>归还号源时不清一人一单判重，患者被永久挡在门外</strong>（号已放回池子给别人抢了，而超时未付款的患者再也约不了这个排班；schema 里那套 <code>active_key</code> 生成列本来就是为「退号后能重约」做的，被热路径上更靠前的判重挡成了不可达——和 L1 门控废掉 L2 是同一个形状）</td></tr>
+          <tr><td><strong>风控</strong></td><td class="num">4</td>
+            <td><strong>L1 门控让 L2 在最该生效的场景不可达</strong>；慢车道速率绑定主限流导致降权无效；<strong>CMS 噪声底盖过阈值，风控在高峰期变成全局熔断器</strong>；<strong>阈值不随噪声自适应</strong>（第一版修复只加宽草图 + 减噪声底，仍不足，被单元测试推翻）</td></tr>
+          <tr><td><strong>可观测性</strong></td><td class="num">9</td>
+            <td>故障期间每请求打完整堆栈（1.6 万条）；日志去重键含 Lua SHA；缺瞬态采样导致故障注入等于白做；<strong>慢车道丢弃与主限流拒绝共用计数器和返回码</strong>（污染压测结论，还让 AIMD 对着自己无法影响的信号做反应）；运营看板读不到护栏的处置说明（字段名错，而功能全对）；<strong>对账留档去重漏掉了最会重复的那一类</strong>（拒绝类结论天生持续，每周期写一条相同记录，默认间隔下一天 2880 行——做去重恰好把最该去重的放过去了）；被驳回的提案审计里 <code>oldValue</code> 硬写 null（看不出「Agent 想从多少改到多少」，而这正是判断它靠不靠谱的依据）；<strong>非法取值的审计回显显示成「500 → 500」</strong>，看起来像一次无害的空变更，真相是有人试图设成 NaN；<strong>MCP 的 body 解析失败返回 Spring 默认错误体而不是 JSON-RPC <code>-32700</code></strong>（协议层写了 -32700 却永远走不到——Jackson 在进入协议层之前就失败了；严格客户端会在解析响应时二次失败，拿到的错误和真正原因完全无关）</td></tr>
+          <tr><td><strong>前端</strong></td><td class="num">3</td>
+            <td><code>manualChunks</code> 写包名抵消按需引入（1193KB → 163KB）；<code>/app/</code> 子目录 404（Spring Boot 只对根路径找 index.html，vite dev 下发现不了）；「我的预约」拿不到医生姓名（接口不返回，页面无法辨认是哪张单）</td></tr>
+          <tr><td><strong>实验工具链</strong></td><td class="num">9</td>
+            <td>kill 校验假阳性（两次）；压测打错实例导致 P5 验证不了任何东西；PowerShell 编码与 stderr 陷阱（三次）；<strong>PS 5.1 不展开 JSON 数组导致循环静默空转</strong>（"已放号 0 个、跳过 0 个"，既不成功也不失败）；对照实验按 ID 区间统计而事件表含历史数据，报出不存在的误判；<strong>脚本读一个改过名的字段做判断，<code>-not $null</code> 恒为真造成假警报</strong>（同一模式第三次：前端读 <code>guardNote</code>、放号脚本读 <code>id</code>）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <div class="note hard">
+        <b>最危险的一类：伪装成成功的失败</b>
+        <p>
+          51 个里有 <strong>15 个</strong>属于同一种模式——<strong>系统看起来完全正常，实际上已经不工作了</strong>：
+          校验器把「发出 75742 条、入库 0 条」判成全部通过；消费者静默停工但健康检查是 UP；
+          kill 校验报告「已确认退出」而进程又活了 21 秒；PEL 以每分钟 100 条还债而外观等同卡死；
+          风控两组成交率都 100% 而判据从未触发；<strong>风控吃掉 95% 的流量而报告只显示「被限流拒绝」</strong>；
+          护栏的钳制说明消失而 <code>accepted</code> 和实际值全对；
+          放号脚本报「0 个成功、0 个跳过」；五条等式全显示通过而机器可读的 <code>passed</code> 是 false；非法参数尝试在审计里显示成「值没变」；退号成功而患者再也约不上，两边状态各自看都正常。
+        </p>
+        <p>
+          这类问题比崩溃危险得多，因为<strong>崩溃会叫，静默降级不会</strong>。
+          它们也解释了这个项目为什么值得做：<strong>写出功能只用了一小部分时间，
+          剩下的都花在建立「能发现自己坏了」的手段上。</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <h3>把不变量写成断言：82 个回归测试</h3>
+
+      <p>
+        这 46 个缺陷里有 <strong>45 个是靠人工观察发现的</strong>——跑一下、看着数字不对、往回查。
+        而其中 11 个属于「看起来正常」那一类，正是因为没有任何东西会主动喊。
+        所以后来补了测试，而且<strong>刻意不追求覆盖率</strong>：
+        静默降级不是靠多测几个分支发现的，而是靠把<b>不变量</b>写成断言。
+      </p>
+
+      <div class="tscroll">
+        <table>
+          <caption>
+            后端 112 个（JUnit 5，纯单元、不起 Spring 容器）+ 前端 34 个（Vitest，
+            <code>environment: 'node'</code>，不引 jsdom）。全部针对纯逻辑单元。
+          </caption>
+          <thead><tr><th>测试</th><th>守的不变量</th><th>失守的后果</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>CountMinSketchTest</code></td>
+              <td>高负载下判据不能退化成对所有人恒真</td>
+              <td>52 万请求被误丢，而外部只表现为「成交偏低」</td>
+            </tr>
+            <tr>
+              <td><code>RiskControlServiceTest</code></td>
+              <td>阈值永远高于噪声底，且只能被抬高不能被压低</td>
+              <td>抬得不够 → 全员误判；抬过头 → 黄牛怎么刷都不触发（漏判没人投诉）</td>
+            </tr>
+            <tr>
+              <td><code>ApptStatusTest</code></td>
+              <td>「占号 / 已归还」覆盖全部状态且不重叠</td>
+              <td>等式③ 开始报「号源凭空消失」，而排查方向完全指不到状态机</td>
+            </tr>
+            <tr>
+              <td><code>McpProtocolTest</code></td>
+              <td>两条错误通道不能混：未知工具→协议错误，执行失败→<code>isError</code> 结果；通知绝不能有响应</td>
+              <td>混了模型就分不清「换个工具」和「换个参数重试」；给通知回响应会让严格客户端断开</td>
+            </tr>
+            <tr>
+              <td><code>GuardDeciderTest</code></td>
+              <td>该挡的挡住（白名单 / 越界 / 震荡幅度 / 冷却期），<strong>而人的明确指令绝不能被挡</strong></td>
+              <td>护栏是唯一允许 LLM 改生产参数的地方。过度保守的护栏比失效的护栏更隐蔽——它返回 accepted=true</td>
+            </tr>
+            <tr>
+              <td><code>ReconcileDeciderTest</code></td>
+              <td>凡是「不该动手」的情况，一次都不能动手</td>
+              <td>误补一次 = 凭空造号 = 自己制造超卖，而超卖对患者是不可回退的违约</td>
+            </tr>
+            <tr>
+              <td><code>useServerClock.spec</code></td>
+              <td>倒计时用校准后的时间，不用 <code>Date.now()</code></td>
+              <td>还能付的单显示「已超时」，服务端日志里什么都没有</td>
+            </tr>
+            <tr>
+              <td><code>useGrab.spec</code></td>
+              <td>退避带抖动；异常路径也要释放锁</td>
+              <td>固定退避一样能「重试成功」，只是所有客户端同步冲击——本地测不出来</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note good">
+        <b>唯一一个由测试发现的缺陷</b>
+        <p>
+          <code>CountMinSketchTest</code> 写完<strong>当场推翻了一小时前的修复</strong>。
+          我手工验证过 A/B 对照（低负载）和 P1 压测（阈值 500），两个都通过就以为修好了。
+          测试直接测了我没验证过的组合——<strong>阈值 3 + 高负载</strong>——
+          发现普通患者的估计值仍然是 4 &gt; 3。
+        </p>
+        <p>
+          这正是测试相对手工验证的价值所在：<strong>我只会去验证我想到的场景，
+          而漏掉的恰恰是我没想到的那个组合。</strong>
+          修完之后同一条测试成了这个不变量的永久守卫。
+        </p>
+      </div>
+    </div>
+
+    <h3>七个能在面试里讲完整的叙事</h3>
+    <div class="bugs">
+      <div class="bug">
+        <p class="id">Narrative 01 · 校验器</p>
+        <h3>把「全部通过」判给了一个一条预约都没入库的系统</h3>
+        <dl>
+          <dt>症状</dt><dd>压测跑完，五条等式全部显示通过。而 MySQL 里<strong>一条预约都没有</strong>。</dd>
+          <dt>根因</dt><dd>排空判据用了 <code>XPENDING</code>。它只统计「已读但未 ACK」的消息，<strong>还没被消费组读取的消息既不算 pending 也不算已处理</strong>。消费者根本没启动时 pending 恰好是 0，于是「发出 75742 条、入库 0 条、pending 0」被判成完美。</dd>
+          <dt>修法</dt><dd>未处理量改用「已发出 − 已处理」计算，并把「多处理」和「欠处理」分成两个方向分别报告。</dd>
+          <dt class="verify">复验</dt><dd class="verify">同样场景现在会报「还有 75742 条未处理」并阻止判定通过。</dd>
+        </dl>
+      </div>
+
+      <div class="bug">
+        <p class="id">Narrative 02 · 消费端</p>
+        <h3>应用健康检查一切正常，消费却已经永久停止</h3>
+        <dl>
+          <dt>症状</dt><dd>积压不再下降，<code>/actuator/health</code> 返回 UP，日志里只有海量看起来无害的 WARN。</dd>
+          <dt>根因</dt><dd>Spring 的监听容器在 Redis 连接抖动时会<strong>取消订阅并终止轮询，且不会自己恢复</strong>。主从切换场景更彻底：应用连到只读副本，而 <code>XREADGROUP</code> 是写命令，每次轮询必然失败。</dd>
+          <dt>修法</dt><dd>看门狗按 <code>isActive()</code> 检测并<strong>先 cancel 再重建</strong>（不 cancel 会泄漏连接，形成「失效—重建」的自我强化循环）；错误处理器区分偶发抖动与结构性故障；顺着 cause 链识别 READONLY 并给出可执行建议。</dd>
+          <dt class="verify">复验</dt><dd class="verify">接哨兵后消费端在切换中全程存活；日志从 187,779 条 WARN 降到 263 条。</dd>
+        </dl>
+      </div>
+
+      <div class="bug">
+        <p class="id">Narrative 03 · 控制面</p>
+        <h3>控制器把放行阈值砍了 73 倍，而积压全程都在下降</h3>
+        <dl>
+          <dt>症状</dt><dd>阈值从 20000 崩到 275，误拒率 99.2%，连续 12 次降速、零次上调。</dd>
+          <dt>根因</dt><dd>降速判据只看积压的<strong>水位</strong>。控制周期 1 秒，而积压排空要几十秒——<strong>执行器比被控对象快 30 倍</strong>。日志里那一列积压数字全程单调下降，说明第 2、3 刀之后每一刀都是纯浪费。</dd>
+          <dt>修法</dt><dd>判据从「水位」改成「趋势」：只要积压在下降就不再砍。再加一个由实测排空速率决定的阈值下限。</dd>
+          <dt class="verify">复验</dt><dd class="verify">降速 12→5 次、上调 0→5 次，同延迟水平下成交 +27.7%。</dd>
+        </dl>
+      </div>
+
+      <div class="bug">
+        <p class="id">Narrative 04 · 实验方法</p>
+        <h3>故障注入报告「已确认生效」，而目标进程又活了 21 秒</h3>
+        <dl>
+          <dt>症状</dt><dd>P5 连续两轮报告「全部等式通过」，但压测器异常数是 0——如果实例真在压测中途死了，后半程请求不可能全部成功。</dd>
+          <dt>根因</dt><dd>满载（3 万+ req/s）时，从「杀进程那一侧」观察的<strong>每一种判据都会假阳性</strong>：<code>Get-Process</code> 瞬时返回 null，端口枚举失败，健康检查的 2 秒超时在服务器饱和时本来就会超时。</dd>
+          <dt>修法</dt><dd>改用<strong>唯一可信的证人</strong>——压测器自己的异常计数。它是真正在和服务器对话的一方；异常为 0 就判定本轮数据无效、不许写进实验表格。</dd>
+          <dt class="verify">复验</dt><dd class="verify">改用 90 秒时长后观测到 933 次失败，故障落地确认；租约回收了 10 个本会少卖的号源。</dd>
+        </dl>
+      </div>
+
+      <div class="bug">
+        <p class="id">Narrative 05 · 风控</p>
+        <h3>分层风控的「按需触发」，把最该抓的场景变成了盲区</h3>
+        <dl>
+          <dt>症状</dt><dd>对照实验里正常患者和黄牛<strong>两组成交率都是 100%</strong>，风控判据从未触发。</dd>
+          <dt>根因</dt><dd>我把设备判据（L2）门控在「患者频次超阈值」之后。而黄牛一机多号时<strong>每个患者的频次都很低</strong>（各请求两三次），高的是设备频次——门控之后 L1 判定通过、L2 根本没机会跑。<strong>我把 L2 门控在了它唯一能发挥作用的场景之外。</strong></dd>
+          <dt>修法</dt><dd>患者维度和设备维度<strong>都在 L1 里算</strong>，任一超阈值才升级到 L2。两个 CMS 成本完全一样，没有任何理由门控其中一个。</dd>
+          <dt class="verify">复验</dt><dd class="verify">A 组 50 患者零误判，B 组黄牛 25 条 L2 命中、成交从 40 降到 26。（当时记录的「降到 12」是被下面 Narrative 07 的噪声污染的数字，已修正。）</dd>
+        </dl>
+      </div>
+
+      <div class="bug">
+        <p class="id">Narrative 07 · 风控 · 本报告唯一被推翻的结论</p>
+        <h3>把「压制 70%」写进简历之后，才发现那是噪声，而同一批噪声在误判所有人</h3>
+        <dl>
+          <dt>症状</dt>
+          <dd>
+            回归压测时发现成交只有 <strong>23,814</strong>，而三小时前同参数是 76,819。
+            报告显示「被限流拒绝 528,224」——数字本身没错，误拒率也确实高，
+            <strong>一切都像是控制面把限流砍狠了</strong>。
+          </dd>
+          <dt>根因</dt>
+          <dd>
+            两层原因叠在一起，任何一层单独都不足以看穿：
+            <br>① <strong>CMS 的噪声底盖过了阈值。</strong>估计值天然含有约「窗口事件数 ÷ width」个别人的计数。
+            width=8192、窗口跨 20 秒、27,666 req/s → 55 万事件 → 噪声底 ≈ 67，而阈值是 3。
+            于是<strong>每一个请求都被判成高频</strong>，55 万个全部降权进 20/s 的慢车道，丢掉 52 万。
+            <br>② <strong>慢车道丢弃和主限流拒绝共用同一个计数器和同一个返回码 4290。</strong>
+            所以风控吃掉的 95% 流量被报成「限流拒绝」，而 AIMD 读到「误拒率 99.9%」
+            就一路砍限流（20000 → 6860）——<strong>控制面在对一个自己根本无法影响的信号做反应。</strong>
+          </dd>
+          <dt>更坏的</dt>
+          <dd>
+            这个噪声<strong>同时污染了三个月前就写进简历的那个数字</strong>。
+            「黄牛产出下降 70%」看起来是好结果，实际上是噪声把设备频次提前推过阈值造成的——
+            而同一批噪声也在误判所有正常患者。<strong>一个漂亮的数字和一个严重的缺陷，
+            是同一个原因的两面。</strong>
+          </dd>
+          <dt>修法</dt>
+          <dd>
+            width 加大 8 倍到 65536（内存 1.5MB → 12MB，仍然固定、不随 key 数量增长）；
+            估计值里<strong>减掉噪声底</strong>（count-mean-min 修正，放弃「永不低估」换掉 100% 误判——
+            这个取舍和风控既定原则一致：误判急需就诊的患者，代价远高于放过黄牛）；
+            新增 <code>RISK_DEMOTED(4291)</code> 与独立计数器，把两种「稍后再试」在可观测性上彻底分开；
+            看板暴露 <code>cmsNoiseFloor</code> 与 <code>criteriaHealthy</code>；
+            <strong>压测器和实验脚本在风控丢弃 ≥1% 时主动报警</strong>，
+            并把本轮风控阈值打进结论行——之前风控静默吃掉 95% 流量而报告毫无痕迹，
+            根因就是没人声明过这个前提。
+          </dd>
+          <dt class="verify">复验</dt>
+          <dd class="verify">
+            同参数成交 23,814 → <strong>83,802</strong>（3.5 倍），风控丢弃 0%，噪声底 67 → 1，
+            五条等式全过。风控本身改用专门的 A/B 脚本标定，得到第 05 节那条随攻击强度上升的曲线。
+          </dd>
+          <dt>后续</dt>
+          <dd>
+            <strong>上面那个修复其实还不够，而是被单元测试当场推翻的。</strong>
+            我手工验证过 A/B 对照（低负载，噪声底 0）和 P1 压测（阈值 500），两个都通过就以为修好了。
+            而 <code>CountMinSketchTest</code> 直接测了我没验证过的组合——<strong>阈值 3 + 高负载</strong>——
+            立刻发现普通患者的修正后估计值是 4，仍然超阈值 3。
+            <br>数学上这是硬限制：减掉噪声底只消除了<b>均值</b>，残余波动仍在若干计数单位量级，
+            而阈值 3 本身就在这个量级里。所以真正的修复是让<strong>阈值自适应噪声底</strong>
+            （取配置值与 3×噪声底的较大者）：低负载时行为完全不变、A/B 结论仍成立；
+            高负载时阈值自动抬到噪声之上，普通患者放行而黄牛依然远超设备阈值。
+            <br>这个抬升也符合业务直觉：<strong>放号瞬间人人都在高频重试，判据本来就该放宽；
+            平峰期同样的频次才是异常。</strong>把「随负载放宽」做成结构性质，
+            比指望运营在洪峰时手动调阈值可靠得多。
+            <br>实测：生产默认阈值 3 + 高压画像，风控丢弃从 <strong>95% 降到 12.2%</strong>，
+            而残余的 12.2% 经查是<strong>真实尾部</strong>——理由写的是「频次估计 7 超阈值 6」，
+            压测流量里确实有患者在窗口内请求了 7 次，判成高频是正确行为。
+            <br><b>这是整个项目第一个由测试而不是由观察发现的缺陷。</b>
+          </dd>
+          <dt>教训</dt>
+          <dd>
+            <strong>性能画像测不出风控好坏，风控画像也测不出引擎性能。</strong>
+            高压画像是「20 万患者各请求两三次」，在患者频次判据看来就是全员高频。
+            两者必须分开跑，而且每轮报告都要写明本轮的风控阈值。
+            更一般地：<strong>近似数据结构必须把自己的误差量级暴露出来</strong>，
+            否则它会在最需要它工作的负载下安静地失效。
+          </dd>
+        </dl>
+      </div>
+
+      <div class="bug">
+        <p class="id">Narrative 06 · 自己引入的</p>
+        <h3>修「日志放大」的时候，把日志放大了 33 倍</h3>
+        <dl>
+          <dt>症状</dt><dd>为解决「故障期间每个失败请求打一条完整堆栈（1.6 万条）」，加了按异常类型去重的限流。结果日志从 3.4 万行涨到 <strong>111 万行</strong>。</dd>
+          <dt>根因</dt><dd>去重键含 root message，而 Redis 报错带 Lua 脚本的 SHA 和行号（<code>script: 6b8f4637..., on @user_script:34</code>）。键一直在变，于是<strong>每条都被判成「新类型」并打完整堆栈</strong>。</dd>
+          <dt>修法</dt><dd>把 SHA、十六进制、数字都折叠成 <code>#</code> 再做键；<strong>另加一个与键无关的硬性速率上限</strong>（5 秒最多一条堆栈）——归一化总会漏掉某种变体，兜底能保证漏掉了也不会炸。</dd>
+          <dt class="verify">复验</dt><dd class="verify">同场景日志 111 万行 → 1,774 行 → 接哨兵后 228 行。</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="cv">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">08 / Resume</p>
+      <h2>简历文案（数字已填实测值）</h2>
+      <p class="sub">
+        <span class="real">青色数字</span>都来自本报告，可追溯到具体某一轮实验。
+        顺序刻意是<strong>业务与数据面在前、控制面与 AI 在后</strong>。
+      </p>
+    </div>
+
+    <div class="resume">
+      <p class="rt">FlashPilot · 医院预约挂号系统（含流量自治控制面）</p>
+      <p class="rm">个人项目 · Java 17 / Spring Boot 3.5 / Redis 7.4 + Sentinel / Lua / Redis Stream / MySQL 8.4 / Prometheus / MCP</p>
+      <ul>
+        <li>
+          面向放号洪峰设计<strong>三层号源结构</strong>（MySQL 权威号源 → Redis 分桶 → 实例本地号段），
+          以 Lua 脚本实现原子扣减与<strong>桶间借调</strong>，全局余量低于阈值时降级为单件直扣；
+          号段命中率 <span class="real">95.2%</span>，即 <span class="real">95.2%</span> 的扣减请求不产生 Redis 调用，
+          单机请求吞吐 <span class="real">30,000–36,700</span> req/s，服务端 P99 <span class="real">24.0</span> ms。
+          热点倾斜画像下借调触发 <span class="real">540</span> 次、桶倾斜度 1.338，验证热点打散确实生效。
+        </li>
+        <li>
+          实现预约单<strong>六状态机与号源超时释放</strong>（未支付 10 分钟自动归还号池），
+          复用引擎的租约归还机制实现两类持有者统一回收；针对本地预扣引入的「少卖」缺陷设计号段租约，
+          并实现<strong>五条可执行一致性等式</strong>（不超卖 / 不少卖 / 号源守恒 / 链路守恒 / 交叉校验）。
+          在实例 kill、MySQL 冻结、Redis 主从切换等 <span class="real">4</span> 类故障注入下均为<strong>零超卖、零少卖</strong>，
+          其中节点故障轮回收 <span class="real">10</span> 个本会变成少卖的号源。
+        </li>
+        <li>
+          实现<strong>三层黄牛识别</strong>：本地 Count-Min Sketch 做频次估计（固定 <span class="real">12</span> MB，
+          热路径零 Redis 调用）、设备指纹关联分析、失约黑名单；处置采用<strong>慢车道降权而非硬拒</strong>
+          （误判急需就诊患者的代价远高于放过黄牛）。对照实验：正常患者 <span class="real">50</span> 人<strong>零误判</strong>，
+          模拟黄牛一机代抢产出下降 <span class="real">35%→67%</span>（随攻击强度上升）。
+          排查并修复该模块的关键缺陷：<strong>CMS 噪声底（窗口事件数÷width ≈ 67）远高于判据阈值（3），
+          导致高峰期全部请求被判为高频</strong>、风控退化成全局熔断器；
+          以扩宽草图 + count-mean-min 修正解决，并把噪声底作为「判据是否可信」的指标暴露到看板。
+        </li>
+        <li>
+          构建<strong>双层流量控制面</strong>：L0 AIMD 规则控制器秒级止损，L1 LLM Agent 经 MCP 读指标与 Trace 做归因与参数提案，
+          配套白名单、区间钳制、dry-run、变更审计与一键回滚，Agent 不可用时自动退化为纯规则。
+          修复控制律<strong>超调缺陷</strong>（判据由积压水位改为趋势）后，同参数同延迟下成交提升 <span class="real">27.7%</span>，
+          放行阈值最低点从 <span class="real">275</span> 回到 <span class="real">3,294</span>。
+        </li>
+        <li>
+          以<strong>混沌实验验证架构取舍</strong>：Redis 主从切换实测异步复制丢弃 <span class="real">14%</span> 的 Stream 数据而 MySQL 预约零丢失，
+          据此确认「Redis 只做预扣与削峰、MySQL 才是账本」；接入 Sentinel 感知客户端后丢写降至 <span class="real">0.6%</span>、
+          请求失败下降 <span class="real">98.7%</span>。全程定位并修复 <span class="real">51</span> 个缺陷，
+          其中 <span class="real">5</span> 个属于「系统看起来正常但已停止工作」的静默降级。
+        </li>
+      </ul>
+    </div>
+
+    <div class="prose">
+      <div class="note">
+        <b>写简历时必须同时说清的事</b>
+        <p>
+          所有数字都来自<strong>单机 Docker 环境</strong>（压测器、应用、Redis、MySQL 同机）。
+          面试时主动说明，并把重点放在「同环境下改动带来的差值」和「故障注入下结论是否仍成立」——
+          这两件事才是可迁移的能力证明。绝对吞吐在单机同机压测下没有说服力，硬吹是扣分项。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="qa">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">09 / Drill</p>
+      <h2>面试问答</h2>
+      <p class="sub">这些题的答案里都有具体数字，而不是「我觉得应该」。</p>
+    </div>
+
+    <div class="qgroup">
+      <details>
+        <summary>为什么做挂号而不是电商秒杀？</summary>
+        <div class="ans">
+          <p>三个理由，第三个是技术判断：</p>
+          <ul>
+            <li><strong>约束更硬</strong>：超卖意味着现场多一个挂不上号的病人，少卖意味着公共医疗资源浪费。这让一致性校验器有存在理由，而不是过度设计。</li>
+            <li><strong>域更完整</strong>：实名制、退号规则、失约黑名单、分时段就诊、黄牛问题，天然需要状态机和风控，不是硬加的。</li>
+            <li><strong>号源可互换</strong>：同一排班内的号完全等价，所以三层库存和桶间借调能成立。我排除了票务选座——座位不可互换，A5 不能借调给想要 B3 的人，那会废掉整套引擎。具体就诊时间是<i>发号后分配</i>的，不是抢号时选择的。</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>你说零超卖，怎么证明的？</summary>
+        <div class="ans">
+          <p>五条可执行等式，压测结束自动断言，不通过就让实验失败：</p>
+          <ul>
+            <li><strong>不超卖</strong>：预约数 ≤ 总号数</li>
+            <li><strong>不少卖</strong>：售罄时刻预约数 = 总号数</li>
+            <li><strong>号源守恒</strong>：总号数 = Σ桶剩余 + Σ实例持有 + 占号预约数 + 已发出未落库</li>
+            <li><strong>链路守恒</strong>：已发出 = 已入库 + 重复 + 超卖拦截 + 死信 + 未处理</li>
+            <li><strong>交叉校验</strong>：占号预约 = 排班已占（当前量）；落库预约 = 消费入库（累计量）</li>
+          </ul>
+          <p>
+            关键是这套等式<strong>真的抓到过 5 个 bug</strong>，包括最早的版本因为用 XPENDING 当排空判据，
+            把「发出 75742 条、入库 0 条」判成了全部通过。我会主动讲这个失败——
+            「校验器自己出过 bug 并被修好」比「校验器一直很完美」可信。
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>未支付的号怎么放回去？和实例宕机归还是一回事吗？</summary>
+        <div class="ans">
+          <p><strong>是同一个形状的问题，所以共用同一套机制</strong>，这是整个设计里我最满意的一处复用。</p>
+          <p>
+            引擎的租约本来解决「实例宕机后手里未售的本地号段必须还回桶」，否则库存凭空消失。
+            机制是 Redis Hash 记录 <code>holder → 持有量 + 到期时间</code>，心跳续约，过期由巡检幂等回收。
+          </p>
+          <p>
+            业务侧「患者预占了号但没付钱」差别只在持有者从「应用实例」变成「预约单」、
+            续约从「心跳」变成「支付」。所以 holder 多一类前缀就复用了同一套归还 Lua。
+          </p>
+          <p>
+            但<strong>归还的桶范围和领取不一样</strong>，这里踩过一个 bug：领取时借调会扫全部 32 个物理桶，
+            所以传 MAX_BUCKETS 安全；<strong>归还如果落到非活跃桶，直连请求永远命不中</strong>，
+            号源等于半失联。归还必须落在活跃桶范围内。
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>失约的号为什么不还回池子？</summary>
+        <div class="ans">
+          <p>
+            因为号源的价值是<strong>「某个时间点某位医生的接诊能力」</strong>，时间过了这个能力就消失了，
+            还回池子也没有任何人能用它。
+          </p>
+          <p>
+            这和电商「退货回库」的语义完全不同——商品退回来还能卖给别人，而周三上午 8:15 的号
+            到周三下午就是废的。所以 NO_SHOW 只计违约次数（累计 3 次限制预约 30 天），不归还号源。
+          </p>
+          <p>这一点如果搞错，一致性等式③ 会永远不平——因为你把一个已经消失的号算进了「可用」。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>风控怎么在 3 万 QPS 的热路径上跑？</summary>
+        <div class="ans">
+          <p>分层，成本递增、按需触发。<strong>关键约束是这条路径的全部意义就是避免网络往返</strong>——本地号段把 95% 的扣减挡在 Redis 之外，风控再加回 RTT 就白干了。</p>
+          <ul>
+            <li><strong>L1 频次</strong>：每请求都跑，本地 Count-Min Sketch，O(1)、零分配、零 I/O。用 CMS 而不是 HashMap 是因为几十万 key 的对象分配会把 GC 压力打到热路径上；</li>
+            <li><strong>L2 行为</strong>：只在 L1 标记后跑。设备指纹关联、请求间隔规律性；</li>
+            <li><strong>L3 黑名单</strong>：必须对每个请求生效，所以不能查库——本地缓存的 Set，定时从 MySQL 刷新。黑名单以百计，放得下。</li>
+          </ul>
+          <p>
+            <strong>CMS 会高估</strong>，所以判据只能是「超阈值就怀疑」，绝不能直接拉黑——
+            高估意味着会冤枉真实患者。
+          </p>
+          <p>
+            而<strong>高估的量级是可以算出来的，这是我在这个项目里学到最有用的一件事</strong>：
+            任意 key 的估计值天然含有约「窗口事件数 ÷ width」个别人的计数。
+            我最初 width=8192、窗口跨 20 秒，压到 27,666 req/s 时噪声底是 <strong>67</strong>，而阈值是 <strong>3</strong>——
+            于是<strong>每一个请求都被判成高频</strong>，风控在最该工作的高峰期变成了全局熔断器，
+            而外部表现只是「成交偏低、误拒率高」，完全看不出风控参与了。
+          </p>
+          <p>
+            修法是扩宽草图 + 在估计值里减掉噪声底（count-mean-min），
+            并把噪声底本身暴露到看板作为「判据是否可信」的指标。
+            <strong>更一般的教训：近似数据结构必须把自己的误差量级暴露出来</strong>，
+            否则它会在负载最高的时候安静地失效。顺带我也放弃了「永不低估」这个性质——
+            当前行为是 100% 误判，比偶尔漏一个黄牛坏得多，而这个取舍和风控既定原则一致。
+          </p>
+          <p>
+            这里还踩过一个很有意思的 bug：最初把设备判据门控在患者判据之后，
+            而黄牛一机多号时每个患者频次都很低、高的是设备频次——<strong>我把 L2 门控在了它唯一能发挥作用的场景之外</strong>。
+            两个 CMS 成本完全一样，没有理由门控其中一个。
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>风控误判了真实患者怎么办？</summary>
+        <div class="ans">
+          <p>这是我在这个项目里做的最重要的一个<strong>价值判断</strong>，不是技术选择。</p>
+          <p>
+            误判一个真实患者的代价极高——可能是急需就诊的老人，反复刷新页面很容易触发频次判据，
+            被拒之后他不会重试、也不会投诉，只是挂不上号。而放过一个黄牛的代价是一个号源被倒卖。
+            <strong>两者严重程度不对称。</strong>
+          </p>
+          <p>
+            所以处置是<strong>降权而不是拒绝</strong>：命中风控的请求走慢车道，绝对速率被压到 20/s，
+            仍有机会抢到，但拿到大量号源在物理上不可能——实测黄牛刷 40 次还能成 65%，
+            刷 200 次就只剩 33%，<strong>越用力刷，边际收益越低</strong>。
+            只有失约黑名单才真正拒绝，而那个判据来自持久化的行为历史，不是瞬时估计。
+          </p>
+          <p>
+            慢车道这里也踩过一个 bug：第一版速率写成主限流的 5%，而主限流默认 20000，
+            算出来 1000/s 根本不叫慢，实测黄牛 80 个请求全部通过。而且绑定主限流本身就自相矛盾——
+            <strong>号源是有限的，黄牛在平峰期刷走 40 个号，跟当时有没有人竞争无关。</strong>
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Redis 主从异步复制会丢数据吗？你的系统受影响吗？</summary>
+        <div class="ans">
+          <p>会丢，我实测了。哨兵 failover 时从库还没复制完就被提升，旧主库反向同步会丢弃多出来的数据。</p>
+          <p>
+            <strong>直连配置下实测丢了 20,685 条 Stream 条目（14%），而 MySQL 的 147,364 笔预约一笔没丢。</strong>
+            这正是设计验证：Redis 只做预扣器和削峰缓冲，账本永远是 MySQL。
+          </p>
+          <p>
+            接 Sentinel 感知客户端后丢写降到 0.6%——客户端立刻重连新主库，只丢切换瞬间那一点。
+            剩下的 0.6% 是异步复制的固有代价，靠对账补偿收敛，不靠 Redis 强一致 ——
+            这个对账现在真的实现了（<code>ReconcileService</code>），不再是一句设想。
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>项目上线了吗？这些数字什么环境测的？</summary>
+        <div class="ans">
+          <p>
+            没上线，单机 Docker 环境。绝对吞吐在同机压测下没有说服力，我关注两件事：
+            <strong>同环境下改动带来的差值</strong>，以及<strong>故障注入后结论是否仍成立</strong>。
+          </p>
+          <p>
+            比如「成交 +27.7% 而 P99 不变」这个差值可信，因为两轮参数完全一致、只改了控制律；
+            「零超卖」是在 4 类故障注入下都验证过的，不是理想条件下跑通一次。
+          </p>
+          <p>
+            我也知道瓶颈在哪：消费端落库约 2,850 笔/秒是天花板，数据面能接的远比 MySQL 能写的多。
+            要提有效吞吐该动批量落库和行锁竞争，不是继续压 Redis。
+          </p>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section id="reconcile">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">10 / Self-healing</p>
+      <h2>对账补偿：让校验器能自己动手</h2>
+      <p class="sub">
+        在这之前，一致性这条线是断的：五条等式能算出「号源凭空消失 37 个」、
+        能说出故障模式的名字，然后就没有然后了 ——
+        <strong>一个只报警不处置的校验器，在无人值守的时段等于不存在。</strong>
+      </p>
+    </div>
+
+    <div class="prose">
+      <p>
+        补偿的<strong>动作</strong>只有一行：把差额加回桶。
+        全部难点在「什么时候<b>不该</b>动手」——四道闸门，每一道都对应一种
+        「补偿自己造成事故」的方式。
+      </p>
+
+      <div class="tscroll">
+        <table>
+          <caption>
+            判据抽成了纯函数 <code>ReconcileDecider</code>（无任何 I/O），16 个单测覆盖四道闸门
+            <strong>及其交互</strong>。留在 Service 里的话，测它要 mock 校验器、Redis、配置、
+            JdbcTemplate 四样东西，于是实际上只会测两三条主路径。
+          </caption>
+          <thead><tr><th>闸门</th><th>规则</th><th>不设会怎样</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>① 方向不对称</strong></td>
+              <td>只自动补少卖，<strong>绝不自动补超卖</strong></td>
+              <td>回收号源 = 取消一个真实患者的预约。<strong>可逆的方向可以自动化，
+                  不可逆的方向必须留给人</strong>——和「让失败落在少卖那一侧」同一条原则</td>
+            </tr>
+            <tr>
+              <td><strong>② 采样必须稳定</strong></td>
+              <td>归还在途时不判定，<strong>而且不计入连续次数</strong></td>
+              <td>只「不动手」不够：反复出现的采样偏移能凑够次数触发补偿，
+                  而那个残差本来不存在 —— 补进去就是凭空造号</td>
+            </tr>
+            <tr>
+              <td><strong>③ 连续同一个数</strong></td>
+              <td>连续 3 次（约 1 分钟）看到<strong>同一个</strong>残差才动手</td>
+              <td>判据写成「连续都非零」会补到中间态上 ——
+                  数字还在变说明系统还在动（消费在途、租约即将回收）</td>
+            </tr>
+            <tr>
+              <td><strong>④ 单次上限</strong></td>
+              <td>残差超过 100 只告警不动手</td>
+              <td>这种量级更可能是校验器自己算错了，补偿会把错误放大成超卖。
+                  <strong>「我的判断可能是错的」必须编码进自动化里</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <b>补完立刻复验，否则会从少卖变成持续超卖</b>
+        <p>
+          补偿之后马上再探一次。不复验的话，补偿动作本身有 bug 时会
+          <strong>每 30 秒重复补一次</strong> —— 那就不是修好了少卖，
+          而是自动化在持续制造超卖。自愈逻辑必须能判断「我刚才那一下到底有没有生效」。
+        </p>
+      </div>
+
+      <div class="note good">
+        <b>开关刻意不进热配置白名单 —— 这是比护栏更强的边界</b>
+        <p>
+          控制面的 8 个热参数都能被 L1 Agent 提案修改，<strong>对账开关不在其中</strong>。
+          它不是「调大调小看效果」的性能旋钮，而是会<strong>直接改动号源账目</strong>的安全开关。
+          让模型能打开它，等于给它凭空造号的能力 —— 即使有护栏，
+          这个能力本身就不该出现在提案空间里。
+        </p>
+        <p>
+          <strong>护栏管的是「改到什么值」，白名单管的是「能不能碰」。</strong>
+          想打开对账得改配置并重启，这个摩擦是刻意的。默认也是关的：
+          一个还没建立信任的自动化应该先只观察 ——
+          <code>POST /admin/reconcile/run?dryRun=true</code> 能看到它「会」做什么，
+          和控制面改参数的 dry-run 是同一个思路：<strong>改账目的动作必须能先预演。</strong>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="gaps">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">11 / Known Gaps</p>
+      <h2>已知缺陷与后续计划</h2>
+      <p class="sub">主动写出缺陷是成熟度信号，而且这几条恰好都是不错的面试延伸话题。</p>
+    </div>
+    <div class="prose">
+      <ul>
+        <li><strong>测试只覆盖纯逻辑单元。</strong>已有 146 个测试（后端 112 / 前端 34），刻意只覆盖两类东西：纯逻辑单元，以及「坏了不会报错」的不变量。而 Lua 脚本、Stream 消费、护栏、放号链路都还没有自动化测试，靠压测脚本端到端验证——这几处都需要 Redis + MySQL，得上 Testcontainers。<strong>护栏已经补上了</strong>——42 个单测，含 bug ⑪「参数永远调不动而接口仍返回 accepted=true」的回归用例。剩下没有自动化测试的是 Lua 脚本、Stream 消费、放号链路，靠压测脚本端到端验证。</li>
+        <li><strong>没有组件测试。</strong>「点按钮后变 disabled」这类渲染行为靠手点。需要 jsdom + <code>@vue/test-utils</code>，但这个前端的逻辑复杂度不在渲染上，优先级低。</li>
+        <li><strong>风控的宽限期无法用频次判据关闭。</strong>设备阈值 15 意味着黄牛前 15 个请求必然放过，而降低它就会误伤「一家五口共用一台手机各刷三次」= 正好 15 次的真实用户。要关掉这个窗口必须换信号（设备指纹信誉、账号年龄、实名核验），这是当前设计的能力边界。</li>
+        <li><strong>L1 Agent 尚未做完整 A/B。</strong>L0 规则层已有前后对比数据，但「规则 vs 规则+Agent」的三组对比还没跑。Agent 链路可用但缺量化结论。</li>
+        <li><strong>MCP 已实现标准协议</strong>（<code>POST /mcp</code>，JSON-RPC 2.0：<code>initialize</code> 版本协商 / <code>tools/list</code> / <code>tools/call</code>，22 个协议单测），任意 MCP 客户端可直接接入。<strong>stdio 传输仍未实现</strong>——Claude Desktop 这类本地宿主需要它，而它的难点不在协议而在「stdout 被日志污染」：stdio 下 stdout 就是协议信道，任何一行日志都会破坏帧。</li>
+        <li><strong>Grafana 只配了数据源，大盘未建。</strong>指标已通过 Micrometer 暴露，建面板是刻意留给自己动手的部分。</li>
+        <li><strong>模拟支付，不接真实网关。</strong>要验证的是超时释放，而不是支付集成——真实网关的异步回调、对账、幂等是另一个题目。</li>
+        <li><strong>单机环境的固有局限。</strong>压测器、应用、Redis、MySQL 同机，网络 RTT 被严重低估——真实多机环境下本地号段的收益会比现在更大，而不是更小。</li>
+      </ul>
+
+      <h4>测试环境</h4>
+      <div class="tscroll">
+        <table>
+          <tbody>
+            <tr><td>机器</td><td>Lenovo Legion Y9000P IRX9，i9-14900HX（24 核 / 32 线程），32 GB</td></tr>
+            <tr><td>系统</td><td>Windows 11 家庭中文版 25H2（build 26200）</td></tr>
+            <tr><td>运行时</td><td>JDK 24（源码级别 17）、Maven 3.9.9、Spring Boot 3.5.6</td></tr>
+            <tr><td>中间件</td><td>Redis 7.4.10（含主从 + 哨兵）/ MySQL 8.4，Docker Desktop（WSL2 后端）</td></tr>
+            <tr><td>部署形态</td><td><strong>全部同机</strong>：压测器、应用、Redis、MySQL 在同一台笔记本上</td></tr>
+            <tr><td>压测器</td><td>内置 <code>com.flashpilot.tools.LoadGenerator</code>，纯 JDK HttpClient，零外部依赖</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    FlashPilot 实验报告 · 医院预约挂号 · 数据采集于 2026-08-16 至 08-17 · 六个压力画像 / 五十一个已修复缺陷 / 82 个回归测试 / 单机 Docker 环境 · 修订一次（第 05 节）
+  </div>
+</footer>

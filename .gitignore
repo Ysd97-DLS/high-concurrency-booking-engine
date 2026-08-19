@@ -1,0 +1,25 @@
+target/
+node_modules/
+frontend/node_modules/
+frontend/components.d.ts
+frontend/auto-imports.d.ts
+# 前端构建产物**刻意纳入版本控制**（682K / 17 个文件）。
+# vite 的 outDir 直接指向这里，所以克隆下来 mvn package 就能得到前端可用的 jar，
+# 不需要装 Node。提交构建产物通常是坏实践，但这个项目的首要用途是
+# 「别人能不能跑起来看一眼」，而为此先装 Node + npm install 门槛太高。
+# 改前端的人跑 `cd frontend && npm run build` 或 `mvn -Pfrontend package`。
+# src/main/resources/static/app/
+*.log
+
+# 运行时产物
+logs/
+*.pid
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+.DS_Store

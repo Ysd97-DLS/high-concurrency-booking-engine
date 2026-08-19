@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: flashpilot
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # 应用跑在宿主机上（不在容器里），所以用 host.docker.internal
+      # 如果你把应用也放进 compose，改成服务名即可
+      - targets: ["host.docker.internal:8090"]
+        labels:
+          instance_role: app
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

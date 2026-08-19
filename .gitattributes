@@ -1,0 +1,35 @@
+# 行尾规范化。
+#
+# 开发环境是 Windows，而 Lua 脚本要交给 Linux 容器里的 Redis 执行、
+# shell 脚本和 compose 文件也可能在容器里跑 —— 这些文件带 CRLF 会出各种怪问题
+# （最典型的是 `#!/bin/sh\r` 被当成命令名的一部分，报 "no such file or directory"，
+# 而报的是解释器不存在，和真实原因完全无关）。
+#
+# 所以：仓库里统一存 LF，检出时由 Git 按平台处理文本文件，
+# 而下面这些明确指定 LF 的，即使在 Windows 上检出也保持 LF。
+
+* text=auto
+
+*.lua      text eol=lf
+*.sh       text eol=lf
+*.sql      text eol=lf
+*.yaml     text eol=lf
+*.yml      text eol=lf
+Dockerfile text eol=lf
+
+# PowerShell 脚本反过来必须是 CRLF + UTF-8 BOM。
+# Windows PowerShell 5.1 默认按 ANSI 编码读 .ps1，无 BOM 的中文会变乱码，
+# 而**乱码会把引号配对搞乱** —— 然后 URL 里的 & 落到字符串外面，
+# 报出一堆 AmpersandNotAllowed 语法错误，和真实原因（编码）毫无关系。
+#
+# BOM 不需要在这里声明 —— 它是文件内容的一部分，Git 原样保存。
+# 这里只管行尾。（不要加 working-tree-encoding=UTF-8：那个属性是给
+# 工作区本身不是 UTF-8 的情况用的，对已经是 UTF-8 的文件设置它只会生事。）
+*.ps1      text eol=crlf
+
+# 二进制，不要碰
+*.png      binary
+*.jpg      binary
+*.ico      binary
+*.woff     binary
+*.woff2    binary

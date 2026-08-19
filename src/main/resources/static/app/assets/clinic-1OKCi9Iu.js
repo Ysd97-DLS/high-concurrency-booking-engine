@@ -1,0 +1,1 @@
+const a={CHIEF:"主任医师",DEPUTY:"副主任医师",ATTENDING:"主治医师",RESIDENT:"住院医师"},n={CHIEF:"danger",DEPUTY:"warning",ATTENDING:"primary",RESIDENT:"info"},s={NORMAL:"普通号",EXPERT:"专家号",SPECIAL:"特需号"},I={AM:"上午",PM:"下午"},P=(E,T)=>T==null?"—":E[T]??T;export{I as P,s as S,n as T,a,P as l};

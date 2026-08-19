@@ -1,0 +1,94 @@
+# FlashPilot 本地基础设施
+#
+#   docker compose up -d              只起 redis + mysql（日常开发用这个）
+#   docker compose --profile obs up -d  额外起 prometheus + grafana（W3 可观测性用）
+#   docker compose down -v            清掉容器和数据卷
+#
+# 主从 + 哨兵（W3 的 P6 故障注入实验）在 docker-compose.ha.yaml 里，单独起。
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: fp-redis
+    ports:
+      - "6379:6379"
+    # noeviction: 库存 key 绝对不能被淘汰，宁可写失败也不能凭空少库存
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mysql:
+    image: mysql:8.4
+    container_name: fp-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: flashpilot
+      MYSQL_DATABASE: flashpilot
+      TZ: Asia/Shanghai
+    # 注意：下面 command 用的是 YAML 折叠标量（>），块内的 # 不是注释而是字符串内容，
+    # 会被当成 mysqld 的参数传进去导致启动失败。所以说明只能写在这里，不能写在块内。
+    #
+    # --skip-log-bin：关掉 binlog。默认 sync_binlog=1 意味着每个事务都要给 binlog 做一次 fsync，
+    #   而 Docker Desktop 的 WSL2 文件系统上 fsync 极慢 —— 实测把订单入库压到了 ~130 条/秒，
+    #   而数据面能产出 3300+/秒，消费者直接成了瓶颈，一致性等式④ 永远过不去。
+    #   这是纯实验库，不需要复制也不需要 PITR，binlog 是纯粹的开销。
+    #   生产环境不能这么干：binlog 是主从复制和时间点恢复的基础。
+    # --innodb-buffer-pool-size=2G：默认 128M，订单表加索引很快就装不下了。
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+      --max-connections=500
+      --innodb-flush-log-at-trx-commit=2
+      --skip-log-bin
+      --innodb-buffer-pool-size=2G
+      --innodb-log-buffer-size=64M
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pflashpilot"]
+      interval: 4s
+      timeout: 4s
+      retries: 30
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: fp-prometheus
+    profiles: ["obs"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: fp-grafana
+    profiles: ["obs"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./deploy/grafana:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  redis-data:
+  mysql-data:
+  grafana-data:

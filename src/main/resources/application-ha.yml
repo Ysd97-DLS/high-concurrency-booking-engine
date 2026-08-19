@@ -1,0 +1,37 @@
+# ha profile：通过 Sentinel 发现主库，让客户端能自动跟随主从切换。
+#
+#   java -jar target\flashpilot-0.1.0.jar --spring.profiles.active=ha
+#
+# 为什么需要这个 profile：默认配置是 host/port 直连。P6 实验证明了直连的后果 ——
+# 主从切换后应用仍连着旧主库（已降级为只读副本），XREADGROUP 是写命令、必然失败，
+# 消费端永久停摆，6 万条消息卡在 pending 里，而应用的健康检查一切正常。
+#
+# 配了 sentinel 之后 Lettuce 会订阅哨兵的 +switch-master 事件，切换时自动重连到新主库。
+# 注意 nodes 里填哨兵的地址，而不是 Redis 的地址；主库地址由哨兵告诉客户端。
+#
+# 前置条件：必须用 scripts\start-ha.ps1 启动主从+哨兵。
+# 那个脚本会把所有地址设成宿主机 IP，否则哨兵上报的容器内网地址宿主机连不通
+# —— 那种情况下哨兵自己一切正常，客户端却永远拿不到能用的地址，
+# 症状是「切换发生了但客户端不跟随」，非常难查。
+
+spring:
+  data:
+    redis:
+      sentinel:
+        master: fpmaster
+        nodes:
+          - 127.0.0.1:26379
+      # 配了 sentinel 之后 host/port 会被忽略
+      timeout: 5000ms
+
+# 刻意<b>不</b>开 lettuce.pool：
+#   1) 它需要额外的 commons-pool2 依赖（第一次写漏了，启动直接 NoClassDefFoundError）；
+#   2) 更重要的是这个 profile 应该只改一件事 —— 走哨兵发现主库。
+#      同时改连接池的话，P6 的结果就无法归因到「客户端跟随切换」这一个变量上。
+#      一次实验只动一个变量，这是实验方法的基本要求。
+
+flashpilot:
+  stock:
+    # 租约比默认的 10s 放长一倍：切换窗口内续约会失败，
+    # 租约太短会让这些「其实还活着」的实例被误判成宕机、库存被误回收。
+    lease-ttl-ms: 20000

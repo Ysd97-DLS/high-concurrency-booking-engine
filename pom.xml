@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.6</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.flashpilot</groupId>
+    <artifactId>flashpilot</artifactId>
+    <version>0.1.0</version>
+    <name>flashpilot</name>
+    <description>具备 AI 自治控制面的高并发秒杀系统</description>
+
+    <properties>
+        <!-- 源码保持 Java 17 兼容（简历上写的就是 17），但可以用本机 JDK 24 编译运行 -->
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <!--
+        前端构建。
+
+        默认**不**跑：`frontend/` 的构建产物（682K / 17 个文件）直接纳入版本控制，
+        输出目录就是 `src/main/resources/static/app`（见 frontend/vite.config.js 的 outDir），
+        所以克隆下来 `mvn package` 就能得到一个前端可用的 jar，**不需要装 Node**。
+
+        这是刻意的取舍。把构建产物提交进仓库通常被认为是坏实践，
+        但这个项目的首要用途是「别人能不能跑起来看一眼」——
+        而为了看一眼先装 Node、跑 npm install（几百 MB 依赖）门槛太高了。
+        682K 换开箱可用，值得。
+
+        改了前端代码的人用这个 profile 重新构建：
+
+            mvn -Pfrontend package
+
+        它要求本地有 Node（开发时用的是 v24）。也可以直接手动跑，效果完全一样：
+
+            cd frontend && npm install && npm run build
+
+        为什么不用 frontend-maven-plugin：它会自己下载一份 Node/npm 到 target 里。
+        对 CI 是好事（环境可复现），但对「学生在自己电脑上跑一下」是纯粹的额外等待，
+        而且首次构建需要联网下载 Node 发行包。
+    -->
+    <profiles>
+        <profile>
+            <id>frontend</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>npm-install</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>npm</executable>
+                                    <workingDirectory>${project.basedir}/frontend</workingDirectory>
+                                    <arguments><argument>install</argument></arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>npm-build</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>npm</executable>
+                                    <workingDirectory>${project.basedir}/frontend</workingDirectory>
+                                    <arguments>
+                                        <argument>run</argument>
+                                        <argument>build</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -1,0 +1,209 @@
+server:
+  # 默认用 8090 而不是惯例的 8080：本机 8080 被 ApplicationWebServer 占用。
+  # 需要改回去时用环境变量覆盖即可：SERVER_PORT=8080
+  port: ${SERVER_PORT:8090}
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 40
+    accept-count: 2000
+    max-connections: 10000
+
+spring:
+  application:
+    name: flashpilot
+  task:
+    scheduling:
+      pool:
+        # **不变量：这个值必须 >= @Scheduled 任务总数。**
+        #
+        # 默认调度器是单线程的，任何一个任务卡住会把其它任务全拖死 —— 这个默认值坑过很多人。
+        # 但配一个「够用」的数同样危险：池子小于任务数时，一个慢任务就能饿死快任务，
+        # 而 **被饿死的定时任务不会报错**。真正的后果是 AIMD 控制器在系统最需要它的时候
+        # 停止反应、指标采集停止刷新，而日志里什么都没有。
+        #
+        # 当前 15 个：配置轮询、指标采集、L0 控制器、L1 Agent、心跳、租约回收、
+        # 消费者看门狗、pending 抢占、超时释放、分批放号、对账补偿、
+        # 风控事件落库、CMS 窗口轮转、黑名单刷新、**失约扫描**。
+        #
+        # 注：这里原来写的是「一共 8 个」，而实际已经 15 个 —— 加任务时容易忘了回来改这个数。
+        #
+        # **这个数字现在不用靠人维护了**：SchedulerCapacityCheck 会在启动时问 Spring
+        # 「你到底注册了几个定时任务」，和这个 size 比一下，不够或余量太薄就打红字。
+        # 上面那句「当前 15 个」准不准已经不要紧了 ——
+        # 一条靠人记的约定变成了一条会自己喊的断言。
+        #
+        # 取 18 是照检查器的建议来的（它要求至少 任务数 + 2）：
+        # 相等不是安全状态，所有任务同时到点时一个慢任务就会让其它任务排队，
+        # 而其中有 1 秒级的控制器和指标采集 —— 迟到就等于控制面失灵。
+        # 实测当前负载下 1 秒级任务的滞后中位 619ms、最大 673ms（间隔 1000ms），
+        # 没有被饿到；但余量薄到再加一两个慢任务就说不准了。
+        size: 18
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/flashpilot?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true
+    username: root
+    password: flashpilot
+    hikari:
+      maximum-pool-size: 40
+      minimum-idle: 8
+      connection-timeout: 5000
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      # 600 并发脉冲压测时 2000ms 会让 Stream 监听容器拿不到连接而抛
+      # RedisConnectionFailureException —— 那会导致订阅被取消且不自愈（见 OrderStreamConsumer 的看门狗）。
+      timeout: 5000ms
+      # 不配连接池：Lettuce 基于 Netty，单连接多路复用在这种场景下比池化更快。
+      # 阻塞式的 Stream 消费由 Spring 的监听容器单独持有连接，不受影响。
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: flashpilot
+      instance: ${flashpilot.instance-id:local}
+
+logging:
+  level:
+    root: INFO
+    com.flashpilot: INFO
+
+flashpilot:
+  # 空则启动时自动生成（hostname-pid-随机后缀）。多实例压测时手工指定更好排查。
+  instance-id: ${INSTANCE_ID:}
+
+  stock:
+    # 桶数：越多热点越散，但借调的 O(n) 遍历越慢，而 Lua 跑在 Redis 单线程里。
+    # 所以这个值被护栏钳制在 1..32，并且由控制面动态调整。
+    bucket-count: 8
+    # 号段大小：大 → Redis 压力小但尾部浪费、实例间不公平；小 → 反之。
+    segment-size: 20
+    # 全局剩余低于这个值就关闭号段模式，退化为单件直扣，
+    # 保证最后几件一定卖得出去，不会被切碎在各实例手里。
+    tail-threshold: 50
+    # 租约：实例宕机后多久其持有的库存可被回收。必须远小于活动时长。
+    lease-ttl-ms: 10000
+    heartbeat-ms: 3000
+    reclaim-scan-ms: 2000
+
+  dedupe:
+    # LOCAL：判重放在实例内存里，热路径 0 次 Redis 调用 —— 但要求网关按 userId
+    #        一致性哈希把同一用户始终路由到同一实例。
+    # REDIS：判重走 Redis Bitmap，无需粘性路由，但每个请求多一次 RTT，
+    #        本地号段省下来的那次 RTT 就白省了。
+    # 这两种模式的对比本身就是一组实验，见 README。
+    mode: LOCAL
+
+  limit:
+    # 令牌桶做在进程内。真实系统里这一层应该在网关，这里放进应用是为了让
+    # 控制面能直接调它、便于做闭环实验。
+    enabled: true
+    permits-per-second: 20000
+    burst: 4000
+
+  stream:
+    key: fp:stream:order
+    group: fp-order-consumers
+    # 每个订阅都要占一条用于阻塞读（XREADGROUP BLOCK）的 Redis 连接，
+    # 而容器是「每轮轮询取一次连接」。订阅数 × (1/pollTimeout) 就是连接获取频率。
+    # 4 个订阅 + 500ms 超时 = 每秒 8 次连接获取，压测时这个频率下必然出现
+    # RedisConnectionFailureException，订阅被取消（见看门狗）。
+    # 落库已经交给 flusher 攒批做了，读取端 2 个订阅完全够用。
+    consumer-count: 2
+    batch-size: 128
+    poll-timeout-ms: 2000
+    # 落库线程数与攒批大小。批量是消费吞吐的关键：
+    # 逐条落库时每条一个事务，而事务里更新 t_item 的那句打的是同一行（单行热点），
+    # 所有线程抢同一把行锁，实测只有约 1000 条/秒；批量后一批只需一次行锁。
+    flusher-count: 4
+    flush-batch-size: 256
+    # pending 中超过这个时间没 ACK 的消息会被其他消费者抢过来重试。
+    # 必须显著大于「消息在落库队列里的排队时间」，否则 claimer 会把还在排队的消息抢去重复处理 ——
+    # 数据不会错（唯一索引挡着），但会造成重复计数，也是白做功。
+    claim-idle-ms: 60000
+    max-deliveries: 5
+
+  # 挂号业务域。这一段的默认值都写在 FlashPilotProperties.Clinic 里，
+  # 这里只显式列出「运维需要知道存在」的那几个。
+  clinic:
+    reconcile:
+      # 失约扫描间隔。把「就诊日已过却仍是 BOOKED」的单转成 NO_SHOW 并累加失约次数。
+      #
+      # 这个任务是补上来的：NO_SHOW 原来是六状态机里**唯一进不去的状态** ——
+      # markNoShow 只有手工 HTTP 接口这一个调用者，而文档写着「就诊时段结束扫描」。
+      # 后果是失约计数永不增加、**失约黑名单永远是空的**，
+      # 而黑名单是整个风控里唯一会「真正拒绝」的手段（其余都只是降权进慢车道）。
+      #
+      # 默认 5 分钟：失约统计不急，正常情况下候选集是空的，
+      # 真正有活干的只是每天 0 点后的那几轮。
+      no-show-scan-ms: 300000
+
+      # 抢到号之后的支付时限（分钟）。原来硬编码在 ApptPersistRepository 里。
+      #
+      # 提出来的直接动机是**可测性**：所有压测都只跑 20-90 秒，而单子 10 分钟后才到期，
+      # 于是超时释放的「先改 MySQL 状态、再还 Redis 号源」这两步从来没在量级上跑过 ——
+      # 而这条路径出错的方式是**双重归还 = 超卖**。
+      # 调成 1 分钟就能在一次压测里把这条路径压出来（见 scripts/soak-expiry.ps1）。
+      #
+      # 生产上不要调小：改短它会让已经发出的单提前作废。
+      pay-minutes: ${PAY_MINUTES:10}
+
+      # 对账补偿：把校验器发现的号源残差自动补回去。
+      #
+      # **默认关，而且刻意不做成热参数。** 8 个热参数都能被 L1 Agent 提案修改，
+      # 这个开关不在其中 —— 它会直接改动号源账目，让模型能打开它等于给它凭空造号的能力。
+      # 护栏管的是「改到什么值」，白名单管的是「能不能碰」，后者是更强的边界。
+      # 想打开得改这里并重启，这个摩擦是刻意的。
+      #
+      # 默认关的另一层理由：一个刚部署、还没建立信任的自动化应该先只观察。
+      # 关着的时候它每 5 分钟做一次 dry-run，只在「会动手或会拒绝」时记一行
+      # 「对账当前是关闭的。如果打开，本轮会：…」——所以打开开关之前，
+      # 手上有几天的真实数据，而不是靠一次手工点击的快照下判断。
+      # 想立刻看细节：POST /admin/reconcile/run?dryRun=true
+      #
+      # 注：这段承诺原来是假的 —— 实现是 `if (!enabled) return;`，关着时日志一行都没有。
+      # 补实现而不是删注释，因为「先观察再打开」这个理念本身是对的。
+      enabled: ${RECONCILE_ENABLED:false}
+      interval-ms: 30000
+      # 连续观测到「同一个」残差多少次才动手。3 × 30s = 稳定复现 1 分钟以上。
+      # 瞬态残差（消费在途、租约即将回收）在这个窗口内会自己消失。
+      consecutive-threshold: 3
+      # 单次补偿上限。超过只告警不动手：这种量级更可能是校验器算错了，
+      # 而补偿会把错误放大成超卖。100 相对典型排班（50-120 号）是保守值。
+      max-compensate-per-run: 100
+
+  control:
+    l0:
+      enabled: true
+      interval-ms: 1000
+      # P99 超过这个值就乘性降速
+      p99-slo-ms: 30
+      decrease-factor: 0.7
+      increase-step: 1000
+      # 连续几个周期健康才允许加性上调
+      healthy-cycles-before-increase: 3
+    guard:
+      # 每个参数两次变更之间的最小间隔，防止震荡
+      cooldown-ms: 5000
+      # 单次变更幅度上限（相对当前值）
+      max-change-ratio: 0.5
+    agent:
+      # 默认关闭：需要填 LLM_API_KEY 才能开。见 README「开启 Agent 控制面」。
+      enabled: false
+      base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+      model: ${LLM_MODEL:deepseek-chat}
+      api-key: ${LLM_API_KEY:}
+      timeout-ms: 20000
+      # 事件驱动：只有指标越界才唤醒 Agent，不做定时轮询。
+      trigger-p99-ms: 50
+      trigger-reject-rate: 0.2
+      trigger-stream-pending: 2000
+      # 一次决策后必须等满观察窗口才允许下一次
+      observe-window-ms: 20000

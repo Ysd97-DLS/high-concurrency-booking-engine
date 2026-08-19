@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FlashPilot</title>
+<!--
+  根路径跳转到 Vue 应用。
+
+  为什么不直接把 Vue 构建产物输出到 static 根目录：那样 index.html 会被
+  每次 npm run build 覆盖/删除（emptyOutDir: true），而 static 根目录下
+  可能还有别的静态资源。放在 /app/ 子目录里边界更清楚，
+  构建产物完全由 Vite 管理，不和手写文件混在一起。
+
+  注意跳转目标必须写全 /app/index.html，不能只写 /app/ ——
+  Spring Boot 的静态资源处理只对**根路径**自动找 index.html（welcome page 机制），
+  子目录不做目录索引解析，访问 /app/ 会直接 404。
+  这个坑很隐蔽：本地 vite dev 时 /app/ 是通的（dev server 会做目录索引），
+  构建后由 Spring Boot 托管才暴露出来。
+-->
+<meta http-equiv="refresh" content="0; url=/app/index.html">
+<script>location.replace('/app/index.html')</script>
+</head>
+<body style="font:15px/1.7 system-ui;padding:40px;color:#4a5b68">
+  正在进入 FlashPilot 预约挂号系统…
+  <a href="/app/index.html">如果没有自动跳转，点这里</a>
+</body>
+</html>
