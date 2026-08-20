@@ -90,6 +90,21 @@ logging:
     root: INFO
     com.flashpilot: INFO
 
+# ---------- 持久层 ----------
+#
+# MyBatis 负责领域 CRUD 与动态 SQL（三处手搓 IN 占位符换成 <foreach>，
+# 手写的结果映射换成 resultMap）。SQL 全部放 XML 而不是注解：
+# 这个项目的 SQL 有条件更新、批量插入、多表求差集，注解里写会难以阅读，
+# 而 XML 里能用 <sql> 片段复用列清单 —— 审计表那四条语句原来抄了三遍同样的列。
+mybatis:
+  mapper-locations: classpath:mapper/**/*.xml
+  configuration:
+    # 下划线列名 → 驼峰属性。没有它，old_value 映射不到 oldValue，
+    # 而且**不会报错**，只是静默给 null —— 这类静默失败在这个项目里已经吃过太多亏。
+    map-underscore-to-camel-case: true
+    # 把 MyBatis 的 SQL 日志接到项目自己的 logger 上，压测时能整体关掉
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
 flashpilot:
   # 空则启动时自动生成（hostname-pid-随机后缀）。多实例压测时手工指定更好排查。
   instance-id: ${INSTANCE_ID:}

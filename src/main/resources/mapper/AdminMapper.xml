@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.flashpilot.clinic.admin.mapper.AdminMapper">
+
+    <!--
+      可选日期过滤。原来是 Java 里拼字符串：
+          sql + (date == null ? "" : " WHERE s.visit_date = ? ") + " ORDER BY ..."
+      再按 date 是否为空决定调 queryForList(sql) 还是 queryForList(sql, date)。
+      两条分支意味着两条实际执行的 SQL，改列名时容易只改到一条。
+      <where> 会在有条件时自动加 WHERE、并吃掉多余的前导 AND。
+    -->
+    <select id="listSchedules" resultType="java.util.LinkedHashMap">
+        SELECT s.id AS scheduleId, s.visit_date AS visitDate, s.period, s.slot_type AS slotType,
+               s.fee_cents AS feeCents, s.total_slots AS totalSlots,
+               s.released_slots AS releasedSlots, s.booked_slots AS bookedSlots,
+               s.status, s.release_at AS releaseAt,
+               d.name AS doctorName, d.title, dep.name AS departmentName
+          FROM t_schedule s
+          JOIN t_doctor d ON d.id = s.doctor_id
+          JOIN t_department dep ON dep.id = s.department_id
+        <where>
+            <if test="date != null">s.visit_date = #{date}</if>
+        </where>
+        ORDER BY s.visit_date, s.id
+    </select>
+
+    <!--
+      useGeneratedKeys + keyProperty 把自增主键写回入参对象，
+      取代原来的 PreparedStatementCreator + GeneratedKeyHolder + 九个 ps.setXxx(下标, ...)。
+
+      department_id 用子查询从医生带出来，避免运营端多传一个可能填错的字段 ——
+      医生属于哪个科室是既定事实，不该让录入的人再抄一遍。
+    -->
+    <insert id="createSchedule" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_schedule
+          (doctor_id, department_id, visit_date, period, slot_type, fee_cents,
+           total_slots, release_at, visit_start, visit_end, status)
+        VALUES (#{doctorId},
+                (SELECT department_id FROM t_doctor WHERE id=#{doctorId}),
+                #{visitDate}, #{period}, #{slotType}, #{feeCents}, #{totalSlots},
+                NOW(), #{visitStart}, #{visitEnd}, 'PENDING')
+    </insert>
+
+    <select id="statusBreakdown" resultType="java.util.LinkedHashMap">
+        SELECT status, COUNT(*) AS count FROM t_appointment
+         WHERE schedule_id=#{scheduleId} GROUP BY status
+    </select>
+
+    <select id="riskEvents" resultType="java.util.LinkedHashMap">
+        SELECT id, patient_id AS patientId, device_id AS deviceId, level, action, reason,
+               created_at AS createdAt
+          FROM t_risk_event ORDER BY id DESC LIMIT #{limit}
+    </select>
+
+    <select id="blockedPatients" resultType="java.util.LinkedHashMap">
+        SELECT id, name, phone, no_show_count AS noShowCount, blocked_until AS blockedUntil
+          FROM t_patient WHERE blocked_until IS NOT NULL AND blocked_until &gt; NOW()
+         ORDER BY blocked_until DESC
+    </select>
+
+    <!-- 人工解除黑名单。误判必须有人工兜底通道，否则风控就是不可接受的。 -->
+    <update id="unblock">
+        UPDATE t_patient SET blocked_until=NULL, no_show_count=0 WHERE id=#{id}
+    </update>
+
+    <select id="scheduleReleaseState" resultType="java.util.LinkedHashMap">
+        SELECT total_slots AS totalSlots, released_slots AS releasedSlots, status
+          FROM t_schedule WHERE id=#{scheduleId}
+    </select>
+
+    <select id="scheduleProgress" resultType="java.util.LinkedHashMap">
+        SELECT total_slots AS totalSlots, released_slots AS releasedSlots,
+               booked_slots AS bookedSlots, status
+          FROM t_schedule WHERE id=#{scheduleId}
+    </select>
+
+    <update id="openSchedule">
+        UPDATE t_schedule SET status='OPEN' WHERE id=#{scheduleId}
+    </update>
+
+    <update id="closeSchedule">
+        UPDATE t_schedule SET status='CLOSED' WHERE id=#{scheduleId}
+    </update>
+
+    <!--
+      带 total 上限的条件更新：放号数物理上不可能超过总号数。
+      这和 incrementBookedBy 是同一道防线的两个环节 —— 一个管「放出去多少」，
+      一个管「卖出去多少」，两者都不能越过 total_slots。
+    -->
+    <update id="releaseSlots">
+        UPDATE t_schedule SET released_slots = released_slots + #{amount}
+         WHERE id = #{scheduleId} AND released_slots + #{amount} &lt;= total_slots
+    </update>
+
+    <update id="rollbackReleased">
+        UPDATE t_schedule SET released_slots = GREATEST(0, released_slots - #{n})
+         WHERE id = #{scheduleId}
+    </update>
+
+</mapper>

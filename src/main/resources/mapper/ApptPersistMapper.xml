@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  号源账目的增减与读取。
+  这些 SQL 都短，但每一条都在账目的关键路径上：booked_slots 既是患者端
+  「剩余 X 号」的数据源，也是一致性等式⑤ 的一项。
+-->
+<mapper namespace="com.flashpilot.clinic.domain.mapper.ApptPersistMapper">
+
+    <!--
+      条件里的上限判断是超卖的最后一道防线：
+      booked + n <= total 让「加超过总数」在数据库层面就不可能发生，
+      即使 Redis 侧的三层库存全乱了也守得住。
+    -->
+    <update id="incrementBookedBy">
+        UPDATE t_schedule
+           SET booked_slots = booked_slots + #{n}
+         WHERE id = #{poolId} AND booked_slots + #{n} &lt;= total_slots
+    </update>
+
+    <!--
+      GREATEST(0, ...) 是下限保护。漏掉这条减法会让 booked_slots 永久漂移：
+      建单时 +1 而归还路径不 -1，每退一个号这个字段就多 1，
+      最终表现为患者端显示「已满」而其实还有号。
+    -->
+    <update id="decrementBookedBy">
+        UPDATE t_schedule
+           SET booked_slots = GREATEST(0, booked_slots - #{n})
+         WHERE id = #{poolId}
+    </update>
+
+    <select id="countAllAppts" resultType="java.lang.Integer">
+        SELECT COUNT(*) FROM t_appointment WHERE schedule_id = #{poolId}
+    </select>
+
+    <!--
+      刻意不带 poolId。等式⑤ 的「消费入库数」是全局计数器（Stream 只有一条，
+      所有号池共用），拿它比某一个池的行数只在「全场只有这个池有流量」时成立 ——
+      实测过：压测完在演示排班上挂了一个号，等式⑤ 立刻报「落库 116 == 入库 117」不一致，
+      数据完全正确，纯粹是拿一个池的行数比所有池的事件数。
+    -->
+    <select id="countAllApptsGlobal" resultType="java.lang.Integer">
+        SELECT COUNT(*) FROM t_appointment
+    </select>
+
+    <delete id="deleteAppt">
+        DELETE FROM t_appointment WHERE patient_id=#{holderId} AND schedule_id=#{poolId}
+    </delete>
+
+    <select id="totalSlots" resultType="java.lang.Integer">
+        SELECT total_slots FROM t_schedule WHERE id = #{poolId}
+    </select>
+
+    <select id="bookedSlots" resultType="java.lang.Integer">
+        SELECT booked_slots FROM t_schedule WHERE id = #{poolId}
+    </select>
+
+</mapper>

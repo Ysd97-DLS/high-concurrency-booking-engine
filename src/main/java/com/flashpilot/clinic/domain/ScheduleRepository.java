@@ -3,13 +3,13 @@ package com.flashpilot.clinic.domain;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+
+import com.flashpilot.clinic.domain.mapper.ScheduleMapper;
 
 /**
  * 排班（= 库存池）仓储。
@@ -21,10 +21,10 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class ScheduleRepository {
 
-    private final JdbcTemplate jdbc;
+    private final ScheduleMapper mapper;
 
-    public ScheduleRepository(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public ScheduleRepository(ScheduleMapper mapper) {
+        this.mapper = mapper;
     }
 
     /** 号池的静态信息，抢号时要用（算就诊时间、写挂号费）。缓存在内存里避免每请求查库。 */
@@ -55,35 +55,16 @@ public class ScheduleRepository {
     }
 
     public PoolInfo find(long scheduleId) {
-        List<PoolInfo> l = jdbc.query("""
-                SELECT id, doctor_id, department_id, visit_date, period, slot_type,
-                       fee_cents, total_slots, visit_start, visit_end, status
-                  FROM t_schedule WHERE id=?
-                """, (rs, n) -> new PoolInfo(
-                rs.getLong("id"), rs.getLong("doctor_id"), rs.getLong("department_id"),
-                rs.getObject("visit_date", LocalDate.class), rs.getString("period"),
-                rs.getString("slot_type"), rs.getInt("fee_cents"), rs.getInt("total_slots"),
-                rs.getObject("visit_start", LocalTime.class),
-                rs.getObject("visit_end", LocalTime.class),
-                rs.getString("status")), scheduleId);
-        return l.isEmpty() ? null : l.get(0);
+        return mapper.find(scheduleId);
     }
 
     /** 患者端：按科室和日期列可约排班，带医生信息。 */
     public List<Map<String, Object>> listOpen(long departmentId, LocalDate date) {
-        return jdbc.queryForList("""
-                SELECT s.id AS scheduleId, s.period, s.slot_type AS slotType, s.fee_cents AS feeCents,
-                       s.total_slots AS totalSlots, s.booked_slots AS bookedSlots,
-                       s.visit_start AS visitStart, s.visit_end AS visitEnd, s.status,
-                       d.id AS doctorId, d.name AS doctorName, d.title, d.specialty
-                  FROM t_schedule s JOIN t_doctor d ON d.id = s.doctor_id
-                 WHERE s.department_id=? AND s.visit_date=? AND s.status='OPEN'
-                 ORDER BY FIELD(d.title,'CHIEF','DEPUTY','ATTENDING','RESIDENT'), s.id
-                """, departmentId, date);
+        return mapper.listOpen(departmentId, date);
     }
 
     public List<Map<String, Object>> listDepartments() {
-        return jdbc.queryForList("SELECT id, code, name FROM t_department ORDER BY sort_order, id");
+        return mapper.listDepartments();
     }
 
     /**
@@ -104,20 +85,8 @@ public class ScheduleRepository {
         if (scheduleIds == null || scheduleIds.isEmpty()) {
             return Map.of();
         }
-        // 占位符按实际数量生成。不能拼字符串值进 SQL —— 即使这里是内部 ID，
-        // 养成参数化的习惯比判断"这个来源安全吗"更可靠。
-        String marks = String.join(",", Collections.nCopies(scheduleIds.size(), "?"));
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT s.id AS scheduleId, s.period, s.slot_type AS slotType,
-                       s.visit_start AS visitStart, s.visit_end AS visitEnd,
-                       d.name AS doctorName, d.title, dep.name AS departmentName
-                  FROM t_schedule s
-                  JOIN t_doctor d ON d.id = s.doctor_id
-                  JOIN t_department dep ON dep.id = s.department_id
-                 WHERE s.id IN (%s)
-                """.formatted(marks), scheduleIds.toArray());
         Map<Long, Map<String, Object>> byId = new HashMap<>();
-        for (Map<String, Object> row : rows) {
+        for (Map<String, Object> row : mapper.viewByIds(scheduleIds)) {
             byId.put(((Number) row.get("scheduleId")).longValue(), row);
         }
         return byId;
@@ -136,27 +105,20 @@ public class ScheduleRepository {
      * 顺序飘的话某些排班可能长期扫不到。
      */
     public List<Long> poolsNeedingReconcile() {
-        return jdbc.queryForList("""
-                SELECT id FROM t_schedule
-                 WHERE released_slots > 0 AND visit_date >= CURDATE()
-                 ORDER BY id
-                """, Long.class);
+        return mapper.poolsNeedingReconcile();
     }
 
     public void addBookedSlots(long scheduleId, int delta) {
-        jdbc.update("UPDATE t_schedule SET booked_slots = booked_slots + ? WHERE id=?",
-                delta, scheduleId);
+        mapper.addBookedSlots(scheduleId, delta);
     }
 
     public int bookedSlots(long scheduleId) {
-        List<Integer> r = jdbc.queryForList(
-                "SELECT booked_slots FROM t_schedule WHERE id=?", Integer.class, scheduleId);
-        return r.isEmpty() || r.get(0) == null ? 0 : r.get(0);
+        Integer v = mapper.bookedSlots(scheduleId);
+        return v == null ? 0 : v;
     }
 
     public int totalSlots(long scheduleId) {
-        List<Integer> r = jdbc.queryForList(
-                "SELECT total_slots FROM t_schedule WHERE id=?", Integer.class, scheduleId);
-        return r.isEmpty() || r.get(0) == null ? 0 : r.get(0);
+        Integer v = mapper.totalSlots(scheduleId);
+        return v == null ? 0 : v;
     }
 }

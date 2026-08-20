@@ -8,7 +8,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.flashpilot.clinic.reconcile.mapper.ReconcileMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -78,7 +78,7 @@ public class ReconcileService {
     private final StockRedisRepository stockRedis;
     private final HotConfigService hotConfig;
     private final FlashPilotProperties props;
-    private final JdbcTemplate jdbc;
+    private final ReconcileMapper reconcileMapper;
     private final com.flashpilot.clinic.domain.ScheduleRepository schedules;
 
     /** 上一次观测到的残差，用于判断「连续多次是同一个数」。 */
@@ -109,13 +109,13 @@ public class ReconcileService {
     private final Deque<Map<String, Object>> recent = new ArrayDeque<>();
 
     public ReconcileService(ConsistencyChecker checker, StockRedisRepository stockRedis,
-                            HotConfigService hotConfig, FlashPilotProperties props, JdbcTemplate jdbc,
+                            HotConfigService hotConfig, FlashPilotProperties props, ReconcileMapper reconcileMapper,
                             com.flashpilot.clinic.domain.ScheduleRepository schedules) {
         this.checker = checker;
         this.stockRedis = stockRedis;
         this.hotConfig = hotConfig;
         this.props = props;
-        this.jdbc = jdbc;
+        this.reconcileMapper = reconcileMapper;
         this.schedules = schedules;
     }
 
@@ -445,14 +445,8 @@ public class ReconcileService {
 
     private void persist(ConsistencyChecker.Report r, boolean acted, int compensated, String decision) {
         try {
-            jdbc.update("""
-                    INSERT INTO t_reconcile_log
-                        (pool_id, initial_stock, bucket_sum, lease_held, holding_appts,
-                         vanished, acted, compensated, decision)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    r.poolId(), r.initialStock(), r.bucketSum(), r.leaseHeld(), r.orderCount(),
-                    r.vanished(), acted ? 1 : 0, compensated, truncate(decision, 500));
+            reconcileMapper.insertLog(r.poolId(), r.initialStock(), r.bucketSum(), r.leaseHeld(),
+                    r.orderCount(), r.vanished(), acted, compensated, truncate(decision, 500));
         } catch (Exception e) {
             // 留档失败不能让对账本身失败
             log.warn("[对账] 留档失败：{}", e.toString());
@@ -471,11 +465,7 @@ public class ReconcileService {
     }
 
     public List<Map<String, Object>> history(int limit) {
-        return jdbc.queryForList("""
-                SELECT id, pool_id AS poolId, vanished, acted, compensated, decision,
-                       created_at AS createdAt
-                  FROM t_reconcile_log ORDER BY id DESC LIMIT ?
-                """, limit);
+        return reconcileMapper.history(limit);
     }
 
     public boolean enabled() {

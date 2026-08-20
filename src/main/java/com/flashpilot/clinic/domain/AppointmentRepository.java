@@ -6,9 +6,9 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+
+import com.flashpilot.clinic.domain.mapper.AppointmentMapper;
 
 /**
  * 预约单持久化。
@@ -26,36 +26,10 @@ public class AppointmentRepository {
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(AppointmentRepository.class);
 
-    private final JdbcTemplate jdbc;
+    private final AppointmentMapper mapper;
 
-    public AppointmentRepository(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
-    }
-
-    private static final String COLS = """
-            id, appt_no, schedule_id, patient_id, doctor_id, visit_date, seq_no, visit_time,
-            status, fee_cents, pay_deadline, paid_at, cancelled_at, event_id, created_at
-            """;
-
-    private final RowMapper<Appointment> mapper = (rs, n) -> new Appointment(
-            rs.getLong("id"),
-            rs.getString("appt_no"),
-            rs.getLong("schedule_id"),
-            rs.getLong("patient_id"),
-            rs.getLong("doctor_id"),
-            rs.getObject("visit_date", LocalDate.class),
-            rs.getInt("seq_no"),
-            rs.getObject("visit_time", LocalTime.class),
-            ApptStatus.valueOf(rs.getString("status")),
-            rs.getInt("fee_cents"),
-            toLdt(rs.getTimestamp("pay_deadline")),
-            toLdt(rs.getTimestamp("paid_at")),
-            toLdt(rs.getTimestamp("cancelled_at")),
-            rs.getString("event_id"),
-            toLdt(rs.getTimestamp("created_at")));
-
-    private static LocalDateTime toLdt(Timestamp ts) {
-        return ts == null ? null : ts.toLocalDateTime();
+    public AppointmentRepository(AppointmentMapper mapper) {
+        this.mapper = mapper;
     }
 
     // ---------- 写 ----------
@@ -68,33 +42,7 @@ public class AppointmentRepository {
      * 返回实际插入的行数，调用方据此累加"已生效"计数。
      */
     public int insertPendingBatch(List<PendingAppt> batch) {
-        if (batch.isEmpty()) {
-            return 0;
-        }
-        StringBuilder sb = new StringBuilder("""
-                INSERT IGNORE INTO t_appointment
-                  (appt_no, schedule_id, patient_id, doctor_id, visit_date, seq_no, visit_time,
-                   status, fee_cents, pay_deadline, event_id)
-                VALUES
-                """);
-        // 每行 10 个占位符（status 是字面量 'PENDING_PAY'，不占位）
-        Object[] args = new Object[batch.size() * 10];
-        int i = 0;
-        for (int k = 0; k < batch.size(); k++) {
-            sb.append(k == 0 ? "" : ",").append("(?,?,?,?,?,?,?,'PENDING_PAY',?,?,?)");
-            PendingAppt p = batch.get(k);
-            args[i++] = p.apptNo();
-            args[i++] = p.scheduleId();
-            args[i++] = p.patientId();
-            args[i++] = p.doctorId();
-            args[i++] = p.visitDate();
-            args[i++] = p.seqNo();
-            args[i++] = p.visitTime();
-            args[i++] = p.feeCents();
-            args[i++] = p.payDeadline();
-            args[i++] = p.eventId();
-        }
-        return jdbc.update(sb.toString(), args);
+        return batch.isEmpty() ? 0 : mapper.insertPendingBatch(batch);
     }
 
     /**
@@ -117,25 +65,13 @@ public class AppointmentRepository {
         if (patientIds.isEmpty()) {
             return java.util.Set.of();
         }
-        String marks = String.join(",", java.util.Collections.nCopies(patientIds.size(), "?"));
-        Object[] args = new Object[patientIds.size() + 1];
-        args[0] = scheduleId;
-        for (int i = 0; i < patientIds.size(); i++) {
-            args[i + 1] = patientIds.get(i);
-        }
-        java.util.List<Long> found = jdbc.queryForList("""
-                SELECT patient_id FROM t_appointment
-                 WHERE schedule_id=? AND patient_id IN (%s)
-                   AND status IN ('PENDING_PAY','BOOKED','COMPLETED','NO_SHOW')
-                """.formatted(marks), Long.class, args);
-        return new java.util.HashSet<>(found);
+        return new java.util.HashSet<>(mapper.findHoldingPatients(scheduleId, patientIds));
     }
 
     /** 这个排班已经用掉的最大就诊序号。序号校准时以它为权威。 */
     public int maxSeqNo(long scheduleId) {
-        java.util.List<Integer> r = jdbc.queryForList(
-                "SELECT MAX(seq_no) FROM t_appointment WHERE schedule_id=?", Integer.class, scheduleId);
-        return r.isEmpty() || r.get(0) == null ? 0 : r.get(0);
+        Integer max = mapper.maxSeqNo(scheduleId);
+        return max == null ? 0 : max;
     }
 
     /**
@@ -150,46 +86,27 @@ public class AppointmentRepository {
      * 而这两句话指向完全不同的修复方向。
      */
     public int countExistingApptNos(java.util.List<String> apptNos) {
-        if (apptNos.isEmpty()) {
-            return 0;
-        }
-        String marks = String.join(",", java.util.Collections.nCopies(apptNos.size(), "?"));
-        java.util.List<Integer> r = jdbc.queryForList(
-                "SELECT COUNT(*) FROM t_appointment WHERE appt_no IN (%s)".formatted(marks),
-                Integer.class, apptNos.toArray());
-        return r.isEmpty() || r.get(0) == null ? 0 : r.get(0);
+        return apptNos.isEmpty() ? 0 : mapper.countExistingApptNos(apptNos);
     }
 
     /** 支付：PENDING_PAY → BOOKED。返回 true 表示这次调用赢了。 */
     public boolean markPaid(String apptNo, LocalDateTime now) {
-        return jdbc.update("""
-                UPDATE t_appointment SET status='BOOKED', paid_at=?
-                 WHERE appt_no=? AND status='PENDING_PAY'
-                """, now, apptNo) == 1;
+        return mapper.markPaid(apptNo, now) == 1;
     }
 
     /** 退号：BOOKED → REFUNDED。号源归还由调用方在这之后做。 */
     public boolean markRefunded(String apptNo, LocalDateTime now) {
-        return jdbc.update("""
-                UPDATE t_appointment SET status='REFUNDED', cancelled_at=?
-                 WHERE appt_no=? AND status='BOOKED'
-                """, now, apptNo) == 1;
+        return mapper.markRefunded(apptNo, now) == 1;
     }
 
     /** 超时：PENDING_PAY → EXPIRED。号源归还由调用方在这之后做。 */
     public boolean markExpired(String apptNo, LocalDateTime now) {
-        return jdbc.update("""
-                UPDATE t_appointment SET status='EXPIRED', cancelled_at=?
-                 WHERE appt_no=? AND status='PENDING_PAY'
-                """, now, apptNo) == 1;
+        return mapper.markExpired(apptNo, now) == 1;
     }
 
     /** 就诊完成：BOOKED → COMPLETED。 */
     public boolean markCompleted(String apptNo) {
-        return jdbc.update("""
-                UPDATE t_appointment SET status='COMPLETED'
-                 WHERE appt_no=? AND status='BOOKED'
-                """, apptNo) == 1;
+        return mapper.markCompleted(apptNo) == 1;
     }
 
     /**
@@ -218,28 +135,17 @@ public class AppointmentRepository {
      * @return 状态是否真的从 BOOKED 改成了 NO_SHOW
      */
     public boolean markNoShow(String apptNo) {
-        int n = jdbc.update("""
-                UPDATE t_appointment SET status='NO_SHOW'
-                 WHERE appt_no=? AND status='BOOKED'
-                """, apptNo);
+        int n = mapper.markNoShow(apptNo);
         if (n == 1) {
-            int counted = jdbc.update("""
-                    UPDATE t_patient p
-                       SET p.no_show_count = p.no_show_count + 1,
-                           p.blocked_until = CASE WHEN p.no_show_count + 1 >= 3
-                                                  THEN DATE_ADD(NOW(), INTERVAL 30 DAY)
-                                                  ELSE p.blocked_until END
-                     WHERE p.id = (SELECT a.patient_id FROM t_appointment a WHERE a.appt_no=?)
-                    """, apptNo);
+            int counted = mapper.bumpNoShowCount(apptNo);
             if (counted != 1) {
-                // 这个 UPDATE 以前<b>没人看它的返回值</b>，而它影响 0 行是完全可能的：
-                // patient_id 是抢号时传进来的 holderId，t_patient 里不一定有这个人
-                // （患者记录被删、数据迁移不一致，或者干脆是压测/演示数据）。
+                // 这个 UPDATE 影响 0 行是完全可能的：patient_id 是抢号时传进来的身份，
+                // t_patient 里不一定有这个人（记录被删、数据迁移不一致，或压测/演示数据）。
                 //
                 // 后果很隐蔽：预约单确实变成了 NO_SHOW，方法也返回 true，
                 // 但**患者的失约次数没有增加** —— 而累计 3 次失约是
                 // 整个风控体系里唯一会「真正拒绝」的判据（其余都只是降权进慢车道）。
-                // 也就是说这个患者<b>无论失约多少次都不会被限制</b>，而日志里一个字都没有。
+                // 也就是说这个患者**无论失约多少次都不会被限制**，而日志里一个字都没有。
                 log.error("失约计数没记上：apptNo={} 已标记 NO_SHOW，但 t_patient 里更新了 {} 行。"
                         + "该患者的失约次数不会增加，累计 3 次禁约 30 天对他永久失效。"
                         + "查 t_appointment.patient_id 是否在 t_patient 里存在",
@@ -267,42 +173,25 @@ public class AppointmentRepository {
      * @param beforeDate 就诊日<b>严格早于</b>这个日期的才算候选。传今天即「昨天及更早」。
      */
     public List<Appointment> findNoShowCandidates(LocalDate beforeDate, int limit) {
-        return jdbc.query("SELECT " + COLS + """
-                  FROM t_appointment
-                 WHERE visit_date < ? AND status='BOOKED'
-                 ORDER BY visit_date
-                 LIMIT ?
-                """, mapper, beforeDate, limit);
+        return mapper.findNoShowCandidates(beforeDate, limit);
     }
 
     /** 捞出已超时的待支付单。走 idx_deadline 索引。 */
     public List<Appointment> findExpiredPending(LocalDateTime now, int limit) {
-        return jdbc.query("SELECT " + COLS + """
-                  FROM t_appointment
-                 WHERE status='PENDING_PAY' AND pay_deadline < ?
-                 ORDER BY pay_deadline
-                 LIMIT ?
-                """, mapper, now, limit);
+        return mapper.findExpiredPending(now, limit);
     }
 
     public List<Appointment> findByPatient(long patientId, int limit) {
-        return jdbc.query("SELECT " + COLS + """
-                  FROM t_appointment WHERE patient_id=? ORDER BY id DESC LIMIT ?
-                """, mapper, patientId, limit);
+        return mapper.findByPatient(patientId, limit);
     }
 
     public Appointment findByApptNo(String apptNo) {
-        List<Appointment> l = jdbc.query("SELECT " + COLS + " FROM t_appointment WHERE appt_no=?",
-                mapper, apptNo);
-        return l.isEmpty() ? null : l.get(0);
+        return mapper.findByApptNo(apptNo);
     }
 
     /** 按状态统计某个号池，供一致性校验用。 */
     public int countByStatus(long scheduleId, ApptStatus status) {
-        List<Integer> r = jdbc.queryForList("""
-                SELECT COUNT(*) FROM t_appointment WHERE schedule_id=? AND status=?
-                """, Integer.class, scheduleId, status.name());
-        return r.isEmpty() || r.get(0) == null ? 0 : r.get(0);
+        return mapper.countByStatus(scheduleId, status.name());
     }
 
     /**
@@ -312,11 +201,7 @@ public class AppointmentRepository {
      * 它们的号已经还回桶了，会被「Σ桶剩余」计入，再算一遍就重复了。
      */
     public int countHoldingSlots(long scheduleId) {
-        List<Integer> r = jdbc.queryForList("""
-                SELECT COUNT(*) FROM t_appointment
-                 WHERE schedule_id=? AND status IN ('PENDING_PAY','BOOKED','COMPLETED','NO_SHOW')
-                """, Integer.class, scheduleId);
-        return r.isEmpty() || r.get(0) == null ? 0 : r.get(0);
+        return mapper.countHoldingSlots(scheduleId);
     }
 
     /** 待支付预占数，单列出来是因为等式③ 要能看出「号卡在哪一环」。 */
@@ -346,9 +231,8 @@ public class AppointmentRepository {
      * 同样是自相矛盾的状态。
      */
     public void resetForExperiment(long scheduleId, int totalSlots) {
-        jdbc.update("DELETE FROM t_appointment WHERE schedule_id=?", scheduleId);
-        jdbc.update("UPDATE t_schedule SET booked_slots=0, total_slots=?, released_slots=? WHERE id=?",
-                totalSlots, totalSlots, scheduleId);
+        mapper.deleteBySchedule(scheduleId);
+        mapper.resetSchedule(scheduleId, totalSlots);
     }
 
     /** 待插入的预约单。字段顺序与 insertPendingBatch 的占位符一致。 */

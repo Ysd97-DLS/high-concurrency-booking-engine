@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.flashpilot.clinic.risk.mapper.RiskEventMapper">
+
+    <!--
+      热路径只入队，落库交给定时任务批量做 —— 风控在 3 万 req/s 的路径上，
+      同步写库会把这条路径的意义（避免网络往返）整个抵消掉。
+    -->
+    <insert id="insertBatch">
+        INSERT INTO t_risk_event (patient_id, device_id, level, action, reason)
+        VALUES
+        <foreach collection="batch" item="e" separator=",">
+            (#{e.patientId}, #{e.deviceId}, #{e.level}, #{e.action}, #{e.reason})
+        </foreach>
+    </insert>
+
+    <select id="findBlockedPatients" resultType="_long">
+        SELECT id FROM t_patient
+         WHERE blocked_until IS NOT NULL AND blocked_until &gt; NOW()
+    </select>
+
+</mapper>

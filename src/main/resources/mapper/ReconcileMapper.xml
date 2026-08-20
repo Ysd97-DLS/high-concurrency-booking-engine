@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.flashpilot.clinic.reconcile.mapper.ReconcileMapper">
+
+    <insert id="insertLog">
+        INSERT INTO t_reconcile_log
+            (pool_id, initial_stock, bucket_sum, lease_held, holding_appts,
+             vanished, acted, compensated, decision)
+        VALUES (#{poolId}, #{initialStock}, #{bucketSum}, #{leaseHeld}, #{holdingAppts},
+                #{vanished}, #{acted}, #{compensated}, #{decision})
+    </insert>
+
+    <select id="history" resultType="java.util.LinkedHashMap">
+        SELECT id, pool_id AS poolId, vanished, acted, compensated, decision,
+               created_at AS createdAt
+          FROM t_reconcile_log ORDER BY id DESC LIMIT #{limit}
+    </select>
+
+</mapper>

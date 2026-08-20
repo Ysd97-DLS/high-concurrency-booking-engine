@@ -15,6 +15,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * </ul>
  * LLM 一次调用是秒级，秒杀请求预算是毫秒级，差三个数量级，所以它只能待在本来就是秒级的控制面里。
  */
+@org.mybatis.spring.annotation.MapperScan("com.flashpilot.**.mapper")
 @SpringBootApplication
 @ConfigurationPropertiesScan
 @EnableScheduling

@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.flashpilot.clinic.admin.mapper.AdminMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -42,7 +42,7 @@ public class ReleaseService {
     /** 分批放号的批次间隔。间隔太小削峰效果有限，太大则患者等太久。 */
     private static final long BATCH_INTERVAL_MS = 2000;
 
-    private final JdbcTemplate jdbc;
+    private final AdminMapper adminMapper;
     private final StockRedisRepository stockRedis;
     private final HotConfigService hotConfig;
 
@@ -52,8 +52,8 @@ public class ReleaseService {
     private record Plan(long scheduleId, int total, int perBatch, long startedAtMs) {
     }
 
-    public ReleaseService(JdbcTemplate jdbc, StockRedisRepository stockRedis, HotConfigService hotConfig) {
-        this.jdbc = jdbc;
+    public ReleaseService(AdminMapper adminMapper, StockRedisRepository stockRedis, HotConfigService hotConfig) {
+        this.adminMapper = adminMapper;
         this.stockRedis = stockRedis;
         this.hotConfig = hotConfig;
     }
@@ -68,9 +68,7 @@ public class ReleaseService {
      */
     public Map<String, Object> open(long scheduleId) {
         Map<String, Object> r = new LinkedHashMap<>();
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT total_slots, released_slots, status FROM t_schedule WHERE id=?
-                """, scheduleId);
+        List<Map<String, Object>> rows = java.util.List.of(adminMapper.scheduleReleaseState(scheduleId));
         if (rows.isEmpty()) {
             r.put("ok", false);
             r.put("message", "排班不存在：" + scheduleId);
@@ -87,7 +85,7 @@ public class ReleaseService {
         int spread = hotConfig.getInt(ConfigParam.RELEASE_SPREAD_SECONDS);
         int remaining = total - released;
 
-        jdbc.update("UPDATE t_schedule SET status='OPEN' WHERE id=?", scheduleId);
+        adminMapper.openSchedule(scheduleId);
 
         if (spread <= 0) {
             int n = releaseBatch(scheduleId, remaining);
@@ -122,9 +120,7 @@ public class ReleaseService {
         }
         for (Plan p : active.values()) {
             try {
-                List<Map<String, Object>> rows = jdbc.queryForList("""
-                        SELECT total_slots, released_slots FROM t_schedule WHERE id=?
-                        """, p.scheduleId());
+                List<Map<String, Object>> rows = java.util.List.of(adminMapper.scheduleReleaseState(p.scheduleId()));
                 if (rows.isEmpty()) {
                     active.remove(p.scheduleId());
                     continue;
@@ -177,10 +173,7 @@ public class ReleaseService {
             return 0;
         }
         // ① 先预留。条件更新是原子的，并发和重复执行都不会让放出量超过 total_slots。
-        int updated = jdbc.update("""
-                UPDATE t_schedule SET released_slots = released_slots + ?
-                 WHERE id = ? AND released_slots + ? <= total_slots
-                """, amount, scheduleId, amount);
+        int updated = adminMapper.releaseSlots(scheduleId, amount);
         if (updated != 1) {
             log.warn("[放号] 预留被拒 scheduleId={} amount={} —— 已放满或被并发抢先，"
                     + "本批不放号（号没有进 Redis，数据仍然一致）", scheduleId, amount);
@@ -208,15 +201,13 @@ public class ReleaseService {
         if (n <= 0) {
             return;
         }
-        jdbc.update("""
-                UPDATE t_schedule SET released_slots = GREATEST(0, released_slots - ?) WHERE id = ?
-                """, n, scheduleId);
+        adminMapper.rollbackReleased(scheduleId, n);
     }
 
     /** 停止放号：把状态改回 CLOSED 并取消未完成的分批计划。剩余的号不再放出。 */
     public Map<String, Object> close(long scheduleId) {
         active.remove(scheduleId);
-        jdbc.update("UPDATE t_schedule SET status='CLOSED' WHERE id=?", scheduleId);
+        adminMapper.closeSchedule(scheduleId);
         log.info("[放号] 已停止 scheduleId={}", scheduleId);
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("ok", true);
@@ -230,9 +221,7 @@ public class ReleaseService {
     }
 
     public Map<String, Object> progress(long scheduleId) {
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT total_slots, released_slots, booked_slots, status FROM t_schedule WHERE id=?
-                """, scheduleId);
+        List<Map<String, Object>> rows = java.util.List.of(adminMapper.scheduleProgress(scheduleId));
         Map<String, Object> r = new LinkedHashMap<>();
         if (rows.isEmpty()) {
             r.put("found", false);

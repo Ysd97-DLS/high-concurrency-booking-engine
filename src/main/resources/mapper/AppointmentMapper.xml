@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  预约单。这个 mapper 是整次迁移收益最大的一个：
+    · 两处手搓的 IN 占位符（String.join(",", nCopies(n, "?")) + 手工拼参数数组）
+      换成 <foreach>，不再需要「参数数组下标要和占位符个数对上」这种易错的手工对齐；
+    · 批量插入原来是 StringBuilder 拼 VALUES + 一个长度 batch.size()*10 的 Object[]，
+      漏一个字段就整体错位，换成 <foreach> 之后字段名是写出来的；
+    · 十五个列名和一份手写 RowMapper 换成 <sql> 片段 + <constructor> resultMap。
+-->
+<mapper namespace="com.flashpilot.clinic.domain.mapper.AppointmentMapper">
+
+    <!--
+      Appointment 是 record，必须按构造器映射，且**参数顺序要和 record 声明顺序完全一致**。
+      原始类型写 _long / _int（写成 long / int 会去找装箱版构造器，抛 NoSuchMethodException，
+      而且要等真的查出数据才暴露）。
+
+      status 是枚举，MyBatis 默认按 name() 映射，和原来 ApptStatus.valueOf(...) 等价。
+      三个 LocalDateTime / LocalDate / LocalTime 走内置的 JSR-310 handler，
+      比原来手写 toLdt(rs.getTimestamp(...)) 少一层空值判断。
+    -->
+    <resultMap id="apptMap" type="com.flashpilot.clinic.domain.Appointment">
+        <constructor>
+            <idArg column="id"            javaType="_long"/>
+            <arg   column="appt_no"       javaType="string"/>
+            <arg   column="schedule_id"   javaType="_long"/>
+            <arg   column="patient_id"    javaType="_long"/>
+            <arg   column="doctor_id"     javaType="_long"/>
+            <arg   column="visit_date"    javaType="java.time.LocalDate"/>
+            <arg   column="seq_no"        javaType="_int"/>
+            <arg   column="visit_time"    javaType="java.time.LocalTime"/>
+            <arg   column="status"        javaType="com.flashpilot.clinic.domain.ApptStatus"/>
+            <arg   column="fee_cents"     javaType="_int"/>
+            <arg   column="pay_deadline"  javaType="java.time.LocalDateTime"/>
+            <arg   column="paid_at"       javaType="java.time.LocalDateTime"/>
+            <arg   column="cancelled_at"  javaType="java.time.LocalDateTime"/>
+            <arg   column="event_id"      javaType="string"/>
+            <arg   column="created_at"    javaType="java.time.LocalDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="cols">
+        id, appt_no, schedule_id, patient_id, doctor_id, visit_date, seq_no, visit_time,
+        status, fee_cents, pay_deadline, paid_at, cancelled_at, event_id, created_at
+    </sql>
+
+    <!-- 占号中的四个状态。等式③ 用的就是这个集合，单独抽出来避免两处写法漂移。 -->
+    <sql id="holdingStatuses">
+        ('PENDING_PAY','BOOKED','COMPLETED','NO_SHOW')
+    </sql>
+
+    <!-- ========== 写 ========== -->
+
+    <insert id="insertPendingBatch">
+        INSERT IGNORE INTO t_appointment
+            (appt_no, schedule_id, patient_id, doctor_id, visit_date, seq_no, visit_time,
+             status, fee_cents, pay_deadline, event_id)
+        VALUES
+        <foreach collection="batch" item="p" separator=",">
+            (#{p.apptNo}, #{p.scheduleId}, #{p.patientId}, #{p.doctorId}, #{p.visitDate},
+             #{p.seqNo}, #{p.visitTime}, 'PENDING_PAY', #{p.feeCents}, #{p.payDeadline}, #{p.eventId})
+        </foreach>
+    </insert>
+
+    <update id="markPaid">
+        UPDATE t_appointment SET status='BOOKED', paid_at=#{now}
+         WHERE appt_no=#{apptNo} AND status='PENDING_PAY'
+    </update>
+
+    <update id="markRefunded">
+        UPDATE t_appointment SET status='REFUNDED', cancelled_at=#{now}
+         WHERE appt_no=#{apptNo} AND status='BOOKED'
+    </update>
+
+    <update id="markExpired">
+        UPDATE t_appointment SET status='EXPIRED', cancelled_at=#{now}
+         WHERE appt_no=#{apptNo} AND status='PENDING_PAY'
+    </update>
+
+    <update id="markCompleted">
+        UPDATE t_appointment SET status='COMPLETED'
+         WHERE appt_no=#{apptNo} AND status='BOOKED'
+    </update>
+
+    <update id="markNoShow">
+        UPDATE t_appointment SET status='NO_SHOW'
+         WHERE appt_no=#{apptNo} AND status='BOOKED'
+    </update>
+
+    <!--
+      累计 3 次失约禁约 30 天。这条 UPDATE 影响 0 行是完全可能的 ——
+      patient_id 是抢号时传进来的身份，t_patient 里不一定有这个人。
+      调用方必须检查返回值：漏掉的话表现是「失约次数永远不增加」而日志一片干净，
+      也就是风控里唯一会真正拒绝的判据对这个患者永久失效。
+    -->
+    <update id="bumpNoShowCount">
+        UPDATE t_patient p
+           SET p.no_show_count = p.no_show_count + 1,
+               p.blocked_until = CASE WHEN p.no_show_count + 1 &gt;= 3
+                                      THEN DATE_ADD(NOW(), INTERVAL 30 DAY)
+                                      ELSE p.blocked_until END
+         WHERE p.id = (SELECT a.patient_id FROM t_appointment a WHERE a.appt_no=#{apptNo})
+    </update>
+
+    <!-- ========== 读 ========== -->
+
+    <select id="findHoldingPatients" resultType="_long">
+        SELECT patient_id FROM t_appointment
+         WHERE schedule_id=#{scheduleId}
+           AND patient_id IN
+        <foreach collection="patientIds" item="pid" open="(" separator="," close=")">
+            #{pid}
+        </foreach>
+           AND status IN <include refid="holdingStatuses"/>
+    </select>
+
+    <select id="countExistingApptNos" resultType="_int">
+        SELECT COUNT(*) FROM t_appointment
+         WHERE appt_no IN
+        <foreach collection="apptNos" item="no" open="(" separator="," close=")">
+            #{no}
+        </foreach>
+    </select>
+
+    <!-- 返回包装类型 Integer：一单都没有时 MAX() 给 NULL，调用方要能区分「0 号」和「没有号」。 -->
+    <select id="maxSeqNo" resultType="java.lang.Integer">
+        SELECT MAX(seq_no) FROM t_appointment WHERE schedule_id=#{scheduleId}
+    </select>
+
+    <select id="findNoShowCandidates" resultMap="apptMap">
+        SELECT <include refid="cols"/>
+          FROM t_appointment
+         WHERE visit_date &lt; #{beforeDate} AND status='BOOKED'
+         ORDER BY visit_date
+         LIMIT #{limit}
+    </select>
+
+    <select id="findExpiredPending" resultMap="apptMap">
+        SELECT <include refid="cols"/>
+          FROM t_appointment
+         WHERE status='PENDING_PAY' AND pay_deadline &lt; #{now}
+         ORDER BY pay_deadline
+         LIMIT #{limit}
+    </select>
+
+    <select id="findByPatient" resultMap="apptMap">
+        SELECT <include refid="cols"/>
+          FROM t_appointment WHERE patient_id=#{patientId} ORDER BY id DESC LIMIT #{limit}
+    </select>
+
+    <select id="findByApptNo" resultMap="apptMap">
+        SELECT <include refid="cols"/> FROM t_appointment WHERE appt_no=#{apptNo}
+    </select>
+
+    <select id="countByStatus" resultType="_int">
+        SELECT COUNT(*) FROM t_appointment WHERE schedule_id=#{scheduleId} AND status=#{status}
+    </select>
+
+    <select id="countHoldingSlots" resultType="_int">
+        SELECT COUNT(*) FROM t_appointment
+         WHERE schedule_id=#{scheduleId} AND status IN <include refid="holdingStatuses"/>
+    </select>
+
+    <!-- ========== 实验支持 ========== -->
+
+    <delete id="deleteBySchedule">
+        DELETE FROM t_appointment WHERE schedule_id=#{scheduleId}
+    </delete>
+
+    <!--
+      released_slots 必须跟着一起写成 total_slots，不能留上一轮的值也不能写 0：
+      留旧值会出现 released > total 这种不可能状态，放号进度显示 300%
+      且 ReleaseService.open() 从此永久拒绝放号；写 0 则看板显示「一个号都没放」
+      而患者却抢得到。预热是直接灌满号池，所以正确取值就是 total_slots。
+    -->
+    <update id="resetSchedule">
+        UPDATE t_schedule
+           SET booked_slots=0, total_slots=#{totalSlots}, released_slots=#{totalSlots}
+         WHERE id=#{scheduleId}
+    </update>
+
+</mapper>

@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.flashpilot.clinic.admin.mapper.AdminMapper;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -37,7 +37,7 @@ import com.flashpilot.dataplane.stock.StockRedisRepository;
 @RequestMapping("/admin")
 public class AdminController {
 
-    private final JdbcTemplate jdbc;
+    private final AdminMapper adminMapper;
     private final ReleaseService release;
     private final StockRedisRepository stockRedis;
     private final MetricsCollector collector;
@@ -49,7 +49,7 @@ public class AdminController {
     private final InstanceRegistry instances;
     private final com.flashpilot.clinic.AppointmentService appointments;
 
-    public AdminController(JdbcTemplate jdbc, ReleaseService release, StockRedisRepository stockRedis,
+    public AdminController(AdminMapper adminMapper, ReleaseService release, StockRedisRepository stockRedis,
                            MetricsCollector collector, HotConfigService hotConfig,
                            ConfigAuditRepository audit, RiskControlService riskControl, SlowLane slowLane,
                            ReconcileService reconcile, InstanceRegistry instances,
@@ -57,7 +57,7 @@ public class AdminController {
         this.appointments = appointments;
         this.reconcile = reconcile;
         this.instances = instances;
-        this.jdbc = jdbc;
+        this.adminMapper = adminMapper;
         this.release = release;
         this.stockRedis = stockRedis;
         this.collector = collector;
@@ -72,17 +72,7 @@ public class AdminController {
     /** 排班列表，带放号进度。运营的主界面。 */
     @GetMapping("/schedules")
     public List<Map<String, Object>> schedules(@RequestParam(required = false) String date) {
-        String sql = """
-                SELECT s.id AS scheduleId, s.visit_date AS visitDate, s.period, s.slot_type AS slotType,
-                       s.fee_cents AS feeCents, s.total_slots AS totalSlots,
-                       s.released_slots AS releasedSlots, s.booked_slots AS bookedSlots,
-                       s.status, s.release_at AS releaseAt,
-                       d.name AS doctorName, d.title, dep.name AS departmentName
-                  FROM t_schedule s
-                  JOIN t_doctor d ON d.id = s.doctor_id
-                  JOIN t_department dep ON dep.id = s.department_id
-                """ + (date == null ? "" : " WHERE s.visit_date = ? ") + " ORDER BY s.visit_date, s.id";
-        return date == null ? jdbc.queryForList(sql) : jdbc.queryForList(sql, LocalDate.parse(date));
+        return adminMapper.listSchedules(date == null ? null : LocalDate.parse(date));
     }
 
     /** 建排班。运营录入的入口。 */
@@ -103,27 +93,11 @@ public class AdminController {
             // POST /admin/schedules//open 直接 404。
             // 这类「写成功了但不告诉你写的是哪一条」的接口，是纯后端阶段最容易漏的缺陷，
             // 因为用 curl 手测单个接口时看不出问题，只有把流程串起来才会暴露。
-            org.springframework.jdbc.support.GeneratedKeyHolder keys =
-                    new org.springframework.jdbc.support.GeneratedKeyHolder();
-            jdbc.update(con -> {
-                var ps = con.prepareStatement("""
-                        INSERT INTO t_schedule
-                          (doctor_id, department_id, visit_date, period, slot_type, fee_cents,
-                           total_slots, release_at, visit_start, visit_end, status)
-                        VALUES (?, (SELECT department_id FROM t_doctor WHERE id=?), ?, ?, ?, ?, ?, NOW(), ?, ?, 'PENDING')
-                        """, java.sql.Statement.RETURN_GENERATED_KEYS);
-                ps.setLong(1, doctorId);
-                ps.setLong(2, doctorId);
-                ps.setObject(3, LocalDate.parse(visitDate));
-                ps.setString(4, period);
-                ps.setString(5, slotType);
-                ps.setInt(6, feeCents);
-                ps.setInt(7, totalSlots);
-                ps.setObject(8, java.time.LocalTime.parse(visitStart));
-                ps.setObject(9, java.time.LocalTime.parse(visitEnd));
-                return ps;
-            }, keys);
-            Number id = keys.getKey();
+            AdminMapper.NewSchedule ns = new AdminMapper.NewSchedule(
+                    doctorId, LocalDate.parse(visitDate), period, slotType, feeCents, totalSlots,
+                    java.time.LocalTime.parse(visitStart), java.time.LocalTime.parse(visitEnd));
+            adminMapper.createSchedule(ns);
+            Number id = ns.getId();
             r.put("ok", true);
             r.put("scheduleId", id == null ? null : id.longValue());
             r.put("totalSlots", totalSlots);
@@ -183,10 +157,7 @@ public class AdminController {
         m.put("releasingSchedules", release.activePlanCount());
 
         // 预约状态分布 —— 运营最关心的一屏
-        m.put("appointments", jdbc.queryForList("""
-                SELECT status, COUNT(*) AS count FROM t_appointment
-                 WHERE schedule_id=? GROUP BY status
-                """, scheduleId));
+        m.put("appointments", adminMapper.statusBreakdown(scheduleId));
 
         // 数据面与控制面指标
         MetricsSnapshot snap = collector.latest();
@@ -253,10 +224,7 @@ public class AdminController {
     /** 风控命中明细，运营用来判断阈值调得合不合适。 */
     @GetMapping("/risk/events")
     public List<Map<String, Object>> riskEvents(@RequestParam(defaultValue = "50") int limit) {
-        return jdbc.queryForList("""
-                SELECT id, patient_id AS patientId, device_id AS deviceId, level, action, reason, created_at AS createdAt
-                  FROM t_risk_event ORDER BY id DESC LIMIT ?
-                """, limit);
+        return adminMapper.riskEvents(limit);
     }
 
     // ---------- 对账补偿 ----------
@@ -284,17 +252,13 @@ public class AdminController {
     /** 失约黑名单，运营可以人工核查误判。 */
     @GetMapping("/patients/blocked")
     public List<Map<String, Object>> blockedPatients() {
-        return jdbc.queryForList("""
-                SELECT id, name, phone, no_show_count AS noShowCount, blocked_until AS blockedUntil
-                  FROM t_patient WHERE blocked_until IS NOT NULL AND blocked_until > NOW()
-                 ORDER BY blocked_until DESC
-                """);
+        return adminMapper.blockedPatients();
     }
 
     /** 人工解除黑名单。误判必须有人工兜底通道，否则风控就是不可接受的。 */
     @PostMapping("/patients/{id}/unblock")
     public Map<String, Object> unblock(@PathVariable long id) {
-        int n = jdbc.update("UPDATE t_patient SET blocked_until=NULL, no_show_count=0 WHERE id=?", id);
+        int n = adminMapper.unblock(id);
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("ok", n == 1);
         r.put("message", n == 1 ? "已解除限制并清零失约次数（最长 30 秒后各实例的本地缓存刷新生效）"

@@ -6,9 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import com.flashpilot.clinic.domain.mapper.ApptPersistMapper;
 import com.flashpilot.dataplane.order.OrderEvent;
 
 /**
@@ -31,7 +31,7 @@ public class ApptPersistRepository {
     /** 支付时限。真实系统常见 15~30 分钟，这里取 10 分钟便于观察超时释放。 */
 
 
-    private final JdbcTemplate jdbc;
+    private final ApptPersistMapper mapper;
     private final StringRedisTemplate redis;
     private final ScheduleRepository schedules;
     private final AppointmentRepository appts;
@@ -41,10 +41,10 @@ public class ApptPersistRepository {
     private final java.util.Map<Long, ScheduleRepository.PoolInfo> poolCache =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    public ApptPersistRepository(JdbcTemplate jdbc, StringRedisTemplate redis,
+    public ApptPersistRepository(ApptPersistMapper mapper, StringRedisTemplate redis,
                                 ScheduleRepository schedules, AppointmentRepository appts,
                                 com.flashpilot.config.FlashPilotProperties props) {
-        this.jdbc = jdbc;
+        this.mapper = mapper;
         this.redis = redis;
         this.schedules = schedules;
         this.appts = appts;
@@ -186,13 +186,7 @@ public class ApptPersistRepository {
         if (n <= 0) {
             return true;
         }
-        // 带 total 上限的条件更新：物理上不可能把 booked 加超过 total。
-        // 这是超卖的最后一道防线，即使 Redis 侧全乱了也守得住。
-        return jdbc.update("""
-                UPDATE t_schedule
-                   SET booked_slots = booked_slots + ?
-                 WHERE id = ? AND booked_slots + ? <= total_slots
-                """, n, poolId, n) == 1;
+        return mapper.incrementBookedBy(poolId, n) == 1;
     }
 
     /**
@@ -209,16 +203,12 @@ public class ApptPersistRepository {
         if (n <= 0) {
             return;
         }
-        jdbc.update("""
-                UPDATE t_schedule
-                   SET booked_slots = GREATEST(0, booked_slots - ?)
-                 WHERE id = ?
-                """, n, poolId);
+        mapper.decrementBookedBy(poolId, n);
     }
 
     /** 已落库的预约总数（含所有状态）。用于和消费入库数这个累计量对齐。 */
     public int countAllAppts(long poolId) {
-        return firstInt("SELECT COUNT(*) FROM t_appointment WHERE schedule_id = ?", poolId);
+        return orZero(mapper.countAllAppts(poolId));
     }
 
     /**
@@ -237,25 +227,24 @@ public class ApptPersistRepository {
      * preheat 之后新增的每一条预约，无论落在哪个号池，都恰好对应一个消费入库事件。
      */
     public int countAllApptsGlobal() {
-        return firstInt("SELECT COUNT(*) FROM t_appointment");
+        return orZero(mapper.countAllApptsGlobal());
     }
 
     /** 回滚单张（抢号后落库前失败的补偿路径）。 */
     public void deleteAppt(long holderId, long poolId) {
-        jdbc.update("DELETE FROM t_appointment WHERE patient_id=? AND schedule_id=?",
-                holderId, poolId);
+        mapper.deleteAppt(holderId, poolId);
     }
 
     // ---------- 一致性校验用的读接口 ----------
 
     /** 号池总号数，等式③ 的初始值。 */
     public int totalSlots(long poolId) {
-        return firstInt("SELECT total_slots FROM t_schedule WHERE id = ?", poolId);
+        return orZero(mapper.totalSlots(poolId));
     }
 
     /** 排班上记录的已生效号数。 */
     public int bookedSlots(long poolId) {
-        return firstInt("SELECT booked_slots FROM t_schedule WHERE id = ?", poolId);
+        return orZero(mapper.bookedSlots(poolId));
     }
 
     /**
@@ -281,8 +270,8 @@ public class ApptPersistRepository {
         poolCache.remove(poolId);
     }
 
-    private int firstInt(String sql, Object... args) {
-        List<Integer> rows = jdbc.queryForList(sql, Integer.class, args);
-        return rows.isEmpty() || rows.get(0) == null ? 0 : rows.get(0);
+    /** COUNT/字段查询在「行不存在」时给 null，统一折成 0。 */
+    private static int orZero(Integer v) {
+        return v == null ? 0 : v;
     }
 }

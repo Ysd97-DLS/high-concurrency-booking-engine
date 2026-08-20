@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.flashpilot.clinic.risk.mapper.RiskEventMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -99,7 +99,7 @@ public class RiskControlService {
         return Math.max(configured, (double) noiseFloor * NOISE_SAFETY);
     }
 
-    private final JdbcTemplate jdbc;
+    private final RiskEventMapper riskEvents;
     private final HotConfigService hotConfig;
     private final SeckillMetrics metrics;
 
@@ -123,11 +123,11 @@ public class RiskControlService {
     private final AtomicLong blocked = new AtomicLong();
 
     /** 待写库的风控事件。热路径只入队，落库交给定时任务批量做。 */
-    private final java.util.concurrent.ConcurrentLinkedQueue<Object[]> eventQueue =
+    private final java.util.concurrent.ConcurrentLinkedQueue<RiskEventMapper.RiskEvent> eventQueue =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
 
-    public RiskControlService(JdbcTemplate jdbc, HotConfigService hotConfig, SeckillMetrics metrics) {
-        this.jdbc = jdbc;
+    public RiskControlService(RiskEventMapper riskEvents, HotConfigService hotConfig, SeckillMetrics metrics) {
+        this.riskEvents = riskEvents;
         this.hotConfig = hotConfig;
         this.metrics = metrics;
     }
@@ -207,7 +207,7 @@ public class RiskControlService {
      */
     private void enqueue(long patientId, String deviceId, String level, String action, String reason) {
         if (eventQueue.size() < 20_000) {
-            eventQueue.add(new Object[]{patientId, deviceId, level, action, reason});
+            eventQueue.add(new RiskEventMapper.RiskEvent(patientId, deviceId, level, action, reason));
         }
     }
 
@@ -217,8 +217,8 @@ public class RiskControlService {
         if (eventQueue.isEmpty()) {
             return;
         }
-        java.util.List<Object[]> batch = new java.util.ArrayList<>(500);
-        Object[] e;
+        java.util.List<RiskEventMapper.RiskEvent> batch = new java.util.ArrayList<>(500);
+        RiskEventMapper.RiskEvent e;
         while (batch.size() < 500 && (e = eventQueue.poll()) != null) {
             batch.add(e);
         }
@@ -226,10 +226,7 @@ public class RiskControlService {
             return;
         }
         try {
-            jdbc.batchUpdate("""
-                    INSERT INTO t_risk_event (patient_id, device_id, level, action, reason)
-                    VALUES (?,?,?,?,?)
-                    """, batch);
+            riskEvents.insertBatch(batch);
         } catch (Exception ex) {
             log.warn("风控事件落库失败，丢弃这批 {} 条：{}", batch.size(), ex.toString());
         }
@@ -247,10 +244,7 @@ public class RiskControlService {
     @Scheduled(fixedDelayString = "${flashpilot.clinic.blocklist-refresh-ms:30000}")
     public void refreshBlocklist() {
         try {
-            java.util.List<Long> ids = jdbc.queryForList("""
-                    SELECT id FROM t_patient
-                     WHERE blocked_until IS NOT NULL AND blocked_until > NOW()
-                    """, Long.class);
+            java.util.List<Long> ids = riskEvents.findBlockedPatients();
             Set<Long> next = ConcurrentHashMap.newKeySet();
             next.addAll(ids);
             blockedPatients = next;

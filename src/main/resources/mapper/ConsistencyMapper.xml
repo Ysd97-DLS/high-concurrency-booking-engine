@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.flashpilot.verify.mapper.ConsistencyMapper">
+
+    <insert id="insertReport">
+        INSERT INTO t_consistency_report
+            (item_id, initial_stock, bucket_sum, lease_held, stream_len, order_count,
+             duplicate, dead_letter, oversold, undersold, passed, detail)
+        VALUES (#{poolId}, #{initialStock}, #{bucketSum}, #{leaseHeld}, #{streamLen},
+                #{orderCount}, #{duplicate}, #{deadLetter}, #{oversold}, #{undersold},
+                #{passed}, #{detail})
+    </insert>
+
+    <!--
+      列别名直接在 SQL 里起成前端要的驼峰名，省掉原来那段逐字段 m.put(...) 的手写映射。
+      created_at 在 SQL 侧就格式化成字符串：这个值只用于展示，早点定死成人类可读的形式，
+      就没有时区被重新解释的机会（项目里已经吃过一次这个亏）。
+    -->
+    <select id="history" resultType="java.util.LinkedHashMap">
+        SELECT id,
+               item_id       AS poolId,
+               initial_stock AS initialStock,
+               bucket_sum    AS bucketSum,
+               lease_held    AS leaseHeld,
+               stream_len    AS streamLen,
+               order_count   AS orderCount,
+               oversold, undersold, passed,
+               DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt
+          FROM t_consistency_report
+         ORDER BY id DESC
+         LIMIT #{limit}
+    </select>
+
+</mapper>

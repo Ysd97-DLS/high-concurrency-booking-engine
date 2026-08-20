@@ -7,7 +7,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.flashpilot.verify.mapper.ConsistencyMapper;
 import org.springframework.stereotype.Service;
 
 import com.flashpilot.clinic.domain.ApptPersistRepository;
@@ -40,17 +40,17 @@ public class ConsistencyChecker {
     private final ConsumerStats consumerStats;
     private final ExperimentContext experiment;
     private final SeckillMetrics metrics;
-    private final JdbcTemplate jdbc;
+    private final ConsistencyMapper consistencyMapper;
 
     public ConsistencyChecker(StockRedisRepository stockRedis, ApptPersistRepository orders,
                               ConsumerStats consumerStats, ExperimentContext experiment,
-                              SeckillMetrics metrics, JdbcTemplate jdbc) {
+                              SeckillMetrics metrics, ConsistencyMapper consistencyMapper) {
         this.stockRedis = stockRedis;
         this.orders = orders;
         this.consumerStats = consumerStats;
         this.experiment = experiment;
         this.metrics = metrics;
-        this.jdbc = jdbc;
+        this.consistencyMapper = consistencyMapper;
     }
 
     /**
@@ -397,15 +397,12 @@ public class ConsistencyChecker {
 
     private void persist(Report r) {
         try {
-            jdbc.update("""
-                            INSERT INTO t_consistency_report
-                                (item_id, initial_stock, bucket_sum, lease_held, stream_len, order_count,
-                                 duplicate, dead_letter, oversold, undersold, passed, detail)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                    r.poolId(), r.initialStock(), r.bucketSum(), r.leaseHeld(), (int) r.streamLength(),
-                    r.orderCount(), (int) r.duplicate(), (int) r.deadLetter(),
-                    r.oversold(), r.undersold(), r.passed() ? 1 : 0,
+            consistencyMapper.insertReport(
+                    r.poolId(), r.initialStock(), r.bucketSum(), r.leaseHeld(),
+                    (int) r.streamLength(), r.orderCount(), (int) r.duplicate(),
+                    (int) r.deadLetter(), r.oversold(), r.undersold(), r.passed(),
+                    // 固定用 \n 而不是 System.lineSeparator()：这个字段会存库并回显，
+                    // 用平台相关的分隔符会让 Windows 开发机和 Linux 部署产出不同内容。
                     String.join("\n", r.equations()));
         } catch (Exception e) {
             log.warn("校验报告落库失败：{}", e.toString());
@@ -414,27 +411,6 @@ public class ConsistencyChecker {
 
     /** 历史报告，用来对比多轮实验。 */
     public List<Map<String, Object>> history(int limit) {
-        return jdbc.query("""
-                SELECT id, item_id, initial_stock, bucket_sum, lease_held, stream_len, order_count,
-                       oversold, undersold, passed,
-                       DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
-                FROM t_consistency_report
-                ORDER BY id DESC
-                LIMIT ?
-                """, (rs, n) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", rs.getLong("id"));
-            m.put("poolId", rs.getLong("item_id"));
-            m.put("initialStock", rs.getInt("initial_stock"));
-            m.put("bucketSum", rs.getInt("bucket_sum"));
-            m.put("leaseHeld", rs.getInt("lease_held"));
-            m.put("streamLen", rs.getInt("stream_len"));
-            m.put("orderCount", rs.getInt("order_count"));
-            m.put("oversold", rs.getInt("oversold"));
-            m.put("undersold", rs.getInt("undersold"));
-            m.put("passed", rs.getBoolean("passed"));
-            m.put("createdAt", rs.getString("created_at"));
-            return m;
-        }, limit);
+        return consistencyMapper.history(limit);
     }
 }

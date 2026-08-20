@@ -491,7 +491,42 @@ Start-Process java -ArgumentList "-jar","target\flashpilot-0.1.0.jar" -WindowSty
 
 ---
 
-## 七、安全边界
+## 七、持久层：为什么是 MyBatis + XML
+
+领域 CRUD 与动态 SQL 走 **MyBatis**，SQL 全部放 XML 而不是注解。
+
+**为什么迁**（原来是 JdbcTemplate，54 条 SQL 散在 10 个文件里）：
+
+| 迁移前 | 迁移后 |
+|---|---|
+| 三处手搓 IN 占位符：`String.join(",", nCopies(n,"?"))` + 手工拼参数数组 | `<foreach>` |
+| 批量插入靠 `StringBuilder` 拼 VALUES + 一个 `batch.size()*10` 的 `Object[]`，漏一个字段整体错位 | `<foreach>`，字段名是写出来的 |
+| 排班列表按 `date == null` 拼两套 SQL、调两个重载 | 一条语句 + `<if>` |
+| 建排班要手写 `PreparedStatementCreator` + `GeneratedKeyHolder` + 九个按下标的 `ps.setXxx` | `useGeneratedKeys="true"` |
+| 审计表十个列名抄了三遍，每处配一份手写 `RowMapper` | `<sql>` 片段 + `<constructor>` resultMap |
+| 风控事件是 `Object[]{patientId, deviceId, level, action, reason}`，靠下标对齐 | 具名 record |
+
+**为什么 XML 不用注解**：这个项目的 SQL 有条件更新、批量插入、多表求差集，注解里写会难以阅读；而 XML 能用 `<sql>` 片段复用列清单。
+
+**架构没变**：`Repository` 保留为门面，业务语义（截断超长文本、把「查不到」翻成 `Optional`、把「affected rows == 1」翻成「这次调用赢了」）留在那一层，Mapper 只忠实反映数据库做了什么。这条边界让迁移的影响面停在 Repository 内部 —— 上层调用点一行都没改。
+
+### 迁移时踩的两个坑（都值得记）
+
+**① `javaType` 必须写 `_long` / `_boolean`，不是 `long` / `boolean`。**
+MyBatis 的别名表里 `long` 指 `java.lang.Long`（装箱），`_long` 才是原始类型。record 的构造器参数是原始类型，写错时 MyBatis 去找 `<init>(Long, Long, ...)` 找不到，抛 `NoSuchMethodException` —— 而这个错**要等真的查出数据才出现，启动和编译全是绿的**。
+
+**② `<constructor>` 的参数顺序必须和 record 声明顺序完全一致。**
+MyBatis 按位置匹配，顺序错了而类型恰好兼容时**不报错**，只会把值装错位置（`param` 字段里出现 `source` 的内容）。
+
+两个坑是同一个形状：**错误不在编译期暴露，而在运行期以"数据不对"的形式出现** —— 和这个项目里其它静默失败一个性质。
+
+### 验证
+
+迁移后重跑全部验证，结果与迁移前一致：215 个 Java 测试 + 100 个前端测试全过；60000 号池压测**五条一致性等式全对、零超卖零少卖零消失**；延迟 P50 2.17ms / P99 19.42ms（迁移前 2.05 / 16.68，同一水平）。
+
+---
+
+## 八、安全边界
 
 这一节是一次自查的结果。它值得单独写，因为**里面每一条都是实测复现的，不是「理论上可能」**——而其中最严重的两个不是配置疏漏，是设计缺陷：加一层登录也修不掉。
 
@@ -619,7 +654,7 @@ wrk -t8 -c400 -d30s -s scripts/wrk-seckill.lua http://127.0.0.1:8090
 
 ---
 
-## 八、已知缺陷与后续计划
+## 九、已知缺陷与后续计划
 
 主动写出缺陷是成熟度信号，也是面试时的加分项。
 
@@ -640,7 +675,7 @@ wrk -t8 -c400 -d30s -s scripts/wrk-seckill.lua http://127.0.0.1:8090
 
 ---
 
-## 九、这个项目参考了什么
+## 十、这个项目参考了什么
 
 主动交代借鉴关系，比装原创可信得多：
 

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  排班 = 库存池。排班 ID 就是引擎的 poolId。
+  这张表是「号源可互换」这个前提的载体：同一排班内的号都是同一位医生、同一天、
+  同一时段、同一号别，业务上完全等价，所以桶间借调、本地号段、租约回收才能成立。
+-->
+<mapper namespace="com.flashpilot.clinic.domain.mapper.ScheduleMapper">
+
+    <resultMap id="poolInfoMap" type="com.flashpilot.clinic.domain.ScheduleRepository$PoolInfo">
+        <constructor>
+            <idArg column="id"            javaType="_long"/>
+            <arg   column="doctor_id"     javaType="_long"/>
+            <arg   column="department_id" javaType="_long"/>
+            <arg   column="visit_date"    javaType="java.time.LocalDate"/>
+            <arg   column="period"        javaType="string"/>
+            <arg   column="slot_type"     javaType="string"/>
+            <arg   column="fee_cents"     javaType="_int"/>
+            <arg   column="total_slots"   javaType="_int"/>
+            <arg   column="visit_start"   javaType="java.time.LocalTime"/>
+            <arg   column="visit_end"     javaType="java.time.LocalTime"/>
+            <arg   column="status"        javaType="string"/>
+        </constructor>
+    </resultMap>
+
+    <select id="find" resultMap="poolInfoMap">
+        SELECT id, doctor_id, department_id, visit_date, period, slot_type,
+               fee_cents, total_slots, visit_start, visit_end, status
+          FROM t_schedule WHERE id=#{scheduleId}
+    </select>
+
+    <!--
+      按职称排序用 FIELD()：主任 → 副主任 → 主治 → 住院医。
+      不能按字母序，那样出来的是 ATTENDING/CHIEF/DEPUTY/RESIDENT，患者看着莫名其妙。
+    -->
+    <select id="listOpen" resultType="java.util.LinkedHashMap">
+        SELECT s.id AS scheduleId, s.period, s.slot_type AS slotType, s.fee_cents AS feeCents,
+               s.total_slots AS totalSlots, s.booked_slots AS bookedSlots,
+               s.visit_start AS visitStart, s.visit_end AS visitEnd, s.status,
+               d.id AS doctorId, d.name AS doctorName, d.title, d.specialty
+          FROM t_schedule s JOIN t_doctor d ON d.id = s.doctor_id
+         WHERE s.department_id=#{departmentId} AND s.visit_date=#{date} AND s.status='OPEN'
+         ORDER BY FIELD(d.title,'CHIEF','DEPUTY','ATTENDING','RESIDENT'), s.id
+    </select>
+
+    <select id="listDepartments" resultType="java.util.LinkedHashMap">
+        SELECT id, code, name FROM t_department ORDER BY sort_order, id
+    </select>
+
+    <!--
+      原来这里是 String.join(",", nCopies(n, "?")) 手工拼占位符再传 toArray()，
+      靠「占位符个数和参数数组长度对得上」维持正确 —— 换成 <foreach> 之后
+      这层手工对齐没有了，参数依然是绑定的（不是拼进 SQL 文本）。
+    -->
+    <select id="viewByIds" resultType="java.util.LinkedHashMap">
+        SELECT s.id AS scheduleId, s.period, s.slot_type AS slotType,
+               s.visit_start AS visitStart, s.visit_end AS visitEnd,
+               d.name AS doctorName, d.title, dep.name AS departmentName
+          FROM t_schedule s
+          JOIN t_doctor d ON d.id = s.doctor_id
+          JOIN t_department dep ON dep.id = s.department_id
+         WHERE s.id IN
+        <foreach collection="scheduleIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+    </select>
+
+    <!--
+      按 id 排序是为了让轮转扫描的顺序稳定可预测 —— 对账每轮只扫一部分，
+      顺序飘的话某些排班可能长期扫不到。
+    -->
+    <select id="poolsNeedingReconcile" resultType="_long">
+        SELECT id FROM t_schedule
+         WHERE released_slots &gt; 0 AND visit_date &gt;= CURDATE()
+         ORDER BY id
+    </select>
+
+    <update id="addBookedSlots">
+        UPDATE t_schedule SET booked_slots = booked_slots + #{delta} WHERE id=#{scheduleId}
+    </update>
+
+    <select id="bookedSlots" resultType="java.lang.Integer">
+        SELECT booked_slots FROM t_schedule WHERE id=#{scheduleId}
+    </select>
+
+    <select id="totalSlots" resultType="java.lang.Integer">
+        SELECT total_slots FROM t_schedule WHERE id=#{scheduleId}
+    </select>
+
+</mapper>

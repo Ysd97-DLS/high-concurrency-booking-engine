@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  变更审计。
+
+  迁到 MyBatis 之后这里最直接的收益是 <sql> 片段：原来同样的十个列名
+  在 JdbcTemplate 版本里抄了三遍，而且每处都配了一份手写的 RowMapper ——
+  加一个字段要改六个地方，漏一处的表现是那一处静默给 null。
+-->
+<mapper namespace="com.flashpilot.controlplane.config.mapper.ConfigAuditMapper">
+
+    <!--
+      Entry 是 record，字段 final、没有 setter，所以必须走 <constructor> 按构造器映射。
+
+      两个坑都踩过，记在这里：
+
+      ① **javaType 必须写 _long / _boolean 而不是 long / boolean。**
+         MyBatis 的别名表里 `long` 指 java.lang.Long（装箱），`_long` 才是原始类型。
+         record 的构造器参数是原始 long，写成 `long` 时 MyBatis 会去找
+         <init>(Long, Long, ...) 找不到，抛 NoSuchMethodException ——
+         而这个错要等到**真的查出数据**才出现，启动和编译都是绿的。
+
+      ② **参数顺序必须和 record 声明顺序完全一致。**
+         MyBatis 按位置匹配，顺序错了而类型恰好兼容时**不会报错**，
+         只会把值装错位置（param 字段里出现 source 的内容）。改 record 时要同步改这里。
+    -->
+    <resultMap id="entryMap" type="com.flashpilot.controlplane.config.ConfigAuditRepository$Entry">
+        <constructor>
+            <idArg column="id"          javaType="_long"/>
+            <arg   column="version"     javaType="_long"/>
+            <arg   column="param"       javaType="string"/>
+            <arg   column="old_value"   javaType="string"/>
+            <arg   column="new_value"   javaType="string"/>
+            <arg   column="source"      javaType="string"/>
+            <arg   column="reason"      javaType="string"/>
+            <arg   column="accepted"    javaType="_boolean"/>
+            <arg   column="guard_note"  javaType="string"/>
+            <arg   column="created_at"  javaType="string"/>
+        </constructor>
+    </resultMap>
+
+    <!--
+      created_at 在 SQL 侧就格式化成字符串，而不是取 TIMESTAMP 再到 Java 里转。
+      理由和项目里那个「时间戳跨进程传递必须自带时区」的坑一致：
+      这个值只用于展示，早点定死成人类可读的字符串，就没有时区被重新解释的机会。
+    -->
+    <sql id="cols">
+        id, version, param, old_value, new_value, source, reason, accepted, guard_note,
+        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+    </sql>
+
+    <insert id="insert">
+        INSERT INTO t_config_audit
+            (version, param, old_value, new_value, source, reason, accepted, guard_note)
+        VALUES (#{version}, #{param}, #{oldValue}, #{newValue},
+                #{source}, #{reason}, #{accepted}, #{guardNote})
+    </insert>
+
+    <select id="recent" resultMap="entryMap">
+        SELECT <include refid="cols"/>
+        FROM t_config_audit
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="lastAccepted" resultMap="entryMap">
+        SELECT <include refid="cols"/>
+        FROM t_config_audit
+        WHERE accepted = 1 AND source &lt;&gt; 'ROLLBACK' AND old_value IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <select id="recentAccepted" resultMap="entryMap">
+        SELECT <include refid="cols"/>
+        FROM t_config_audit
+        WHERE accepted = 1
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>
