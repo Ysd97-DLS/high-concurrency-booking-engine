@@ -3,6 +3,10 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    # 固定 uid：dashboard JSON 要按 uid 引用数据源。
+    # 不给的话 Grafana 每次生成随机 uid，provisioning 进来的 dashboard 就会
+    # 显示「Datasource not found」—— 而那个错误看起来像 dashboard 写错了。
+    uid: fp-prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true

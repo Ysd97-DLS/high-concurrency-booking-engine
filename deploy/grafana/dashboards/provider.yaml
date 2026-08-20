@@ -1,0 +1,18 @@
+# Dashboard provisioning provider。
+#
+# Grafana 只会扫描这个 provider 声明的目录，所以光把 JSON 丢进去不够 ——
+# 少了这个文件，dashboard 不会出现，而 Grafana 也不会报错说「你少了个 provider」。
+apiVersion: 1
+
+providers:
+  - name: flashpilot
+    orgId: 1
+    folder: FlashPilot
+    type: file
+    disableDeletion: false
+    # 允许在界面上改完再导出回来覆盖文件
+    allowUiUpdates: true
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

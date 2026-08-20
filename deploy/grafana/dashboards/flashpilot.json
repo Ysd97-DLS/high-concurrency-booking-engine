@@ -1,0 +1,967 @@
+{
+  "title": "FlashPilot 控制面",
+  "uid": "flashpilot-control",
+  "tags": [
+    "flashpilot"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "style": "dark",
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "当前放行阈值",
+      "description": "L0 AIMD 正在使用的每秒放行上限。它是控制面唯一直接操作的旋钮。",
+      "targets": [
+        {
+          "expr": "control_limit_qps",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "消费积压",
+      "description": "Stream 里已发出但还没落库的成交事件。积压是 AIMD 收紧放行的首要依据 —— 它比延迟更早暴露下游跟不上。超过 2000 就会唤醒 L1。",
+      "targets": [
+        {
+          "expr": "stream_pending",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d95926",
+                "value": null
+              },
+              {
+                "color": "#fab219",
+                "value": 2000
+              },
+              {
+                "color": "#d03b3b",
+                "value": 20000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "号段命中率",
+      "description": "扣减请求里不需要访问 Redis 的比例。这个数字是三层库存存在的全部理由 —— 它掉下来说明本地号段没起作用，热路径退化成每请求一次 Redis 往返。",
+      "targets": [
+        {
+          "expr": "stock_segment_hitRatio",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "桶倾斜度",
+      "description": "活跃桶之间余量的离散程度。偏高说明流量集中在少数桶上，直连命中率下降、借调变频繁。P3 热点画像下实测到过 1.155。",
+      "targets": [
+        {
+          "expr": "stock_bucket_skew",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9085e9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "① 消费积压",
+      "description": "AIMD 闭环的第一环：下游跟不上时积压先涨。\n\n这三张图刻意分开画、不做双轴 —— 积压（万级）、放行阈值（万级 req/s）、P99（毫秒）三个量纲放一张图必须配两三个 Y 轴，而双轴的刻度对齐是任意的，会凭空造出一个数据里没有的相关性。分开画 + 共享时间光标，因果关系照样读得出来，而且不骗人。",
+      "targets": [
+        {
+          "expr": "stream_pending",
+          "refId": "A",
+          "legendFormat": "积压条数"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "积压条数"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "② 放行阈值（L0 AIMD 的反应）",
+      "description": "第二环：积压涨 → 乘性收紧放行。把光标停在上一张图积压的爬升段，这条线应该正在往下走。\n\n第一版的判据看积压**水位**而不是**趋势**，而控制周期 1 秒、积压排空要几十秒 —— 执行器比被控对象快 30 倍，于是对着一个已经在下降的信号疯狂过度修正，阈值被砍了 73 倍、误拒率 99.2%。改成趋势判据后成交 +27.7% 而 P99 基本不变。",
+      "targets": [
+        {
+          "expr": "control_limit_qps",
+          "refId": "A",
+          "legendFormat": "limit.qps"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "limit.qps"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "③ 抢号 P99",
+      "description": "第三环：放行收紧之后延迟回落。SLO 是 30ms。\n\n注意这是**服务端**延迟，不含客户端排队 —— 两者在高压下能差一个数量级，而报告里两个都给，因为只给服务端数字等于把排队时间藏起来。",
+      "targets": [
+        {
+          "expr": "seckill_latency_seconds{quantile=\"0.99\"}",
+          "refId": "A",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P99"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "成交速率",
+      "description": "真正拿到号的速率。单独一张图而不是和「未成交原因」堆在一起 —— 混在一个堆叠里时总高度是总请求量，而成交只占很小一部分，形状会被压扁到看不见。",
+      "targets": [
+        {
+          "expr": "rate(seckill_effective_total{result=\"success\"}[1m])",
+          "refId": "A",
+          "legendFormat": "成交"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "成交"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "未成交的原因",
+      "description": "五个原因分开看，因为它们的处置完全不同：限流拒绝是控制面唯一能影响的那部分；风控丢弃控制面看得到但管不着（调限流对它无效）；「号源已满」是正常售罄；而「异常」不该是非零的。\n\n堆叠顺序不是随便排的：orange→blue→yellow→violet→red 这个次序跑过色盲可分辨性校验（最差相邻对 CVD ΔE 19.5）。按语义配色的第一版被判不合格 —— 绿色和橙色相邻时，红绿色盲看它们的差异只有 ΔE 2.7。",
+      "targets": [
+        {
+          "expr": "rate(seckill_result_total{result=\"rejected\"}[1m])",
+          "refId": "A",
+          "legendFormat": "限流拒绝"
+        },
+        {
+          "expr": "rate(seckill_result_total{result=\"duplicate\"}[1m])",
+          "refId": "B",
+          "legendFormat": "重复购买"
+        },
+        {
+          "expr": "rate(seckill_result_total{result=\"sold_out\"}[1m])",
+          "refId": "C",
+          "legendFormat": "号源已满"
+        },
+        {
+          "expr": "rate(seckill_result_total{result=\"risk_dropped\"}[1m])",
+          "refId": "D",
+          "legendFormat": "风控丢弃"
+        },
+        {
+          "expr": "rate(seckill_result_total{result=\"error\"}[1m])",
+          "refId": "E",
+          "legendFormat": "异常"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 55,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "限流拒绝"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "重复购买"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "号源已满"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "风控丢弃"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "异常"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "号在哪一层",
+      "description": "三层库存的实时分布。堆叠起来的总高度应该等于「还没卖出去的号」。\n\n「实例持有」是各实例领走但还没卖掉的本地号段。它不为零是正常的，但实例被 kill 之后如果一直不回落，就是租约回收没生效 —— 那些号既不在桶里也卖不出去，等式③ 会把它算成少卖。",
+      "targets": [
+        {
+          "expr": "stock_bucket_sum",
+          "refId": "A",
+          "legendFormat": "桶余量"
+        },
+        {
+          "expr": "stock_lease_held",
+          "refId": "B",
+          "legendFormat": "实例持有"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 45,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "桶余量"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "实例持有"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "控制面动作",
+      "description": "谁在动参数、动了多少次。\n\n「L1 被驳回」不是故障指标 —— 护栏（白名单/区间钳制/单次幅度/冷却期）驳回一个提案正是它该做的事。这条线一直是零反而值得怀疑：说明 L1 从没提出过越界建议，而那通常意味着它根本没在跑。",
+      "targets": [
+        {
+          "expr": "control_config_version",
+          "refId": "A",
+          "legendFormat": "参数变更累计"
+        },
+        {
+          "expr": "agent_decisions",
+          "refId": "B",
+          "legendFormat": "L1 决策累计"
+        },
+        {
+          "expr": "agent_rejected",
+          "refId": "C",
+          "legendFormat": "L1 被驳回累计"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "参数变更累计"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "L1 决策累计"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "L1 被驳回累计"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fp-prometheus"
+      },
+      "id": 11
+    }
+  ]
+}

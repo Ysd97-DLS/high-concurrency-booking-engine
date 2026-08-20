@@ -48,13 +48,43 @@ Get-Content sql\06-noshow-index.sql  | docker exec -i fp-mysql sh -c 'MYSQL_PWD=
 `05`（对账留档表）漏了的话运营看板会显示一条黄色提示，其余部分照常工作；
 `06`（失约扫描的索引）漏了的话扫描仍然正确，只是走全表扫 —— 表大了会慢。
 
-想要 Prometheus + Grafana（W3 用）：
+想要 Prometheus + Grafana：
 
 ```powershell
 docker compose --profile obs up -d
-# Grafana http://localhost:3000  (匿名可进)
-# Prometheus http://localhost:9090
+# Grafana     http://localhost:3000   匿名可进，dashboard 自动加载
+# Prometheus  http://localhost:9090
 ```
+
+打开 Grafana 就有 **FlashPilot 控制面** 这个 dashboard（provisioning 自动导入，不用手动建）。
+它最上面三张图是刻意分开画的：
+
+```
+①  消费积压        stream_pending
+②  放行阈值        control_limit_qps      ← L0 AIMD 的反应
+③  抢号 P99        seckill_latency_seconds
+```
+
+**为什么不把它们叠成一张双轴图**：积压是万级、放行是万级 req/s、P99 是毫秒，
+三个量纲放一张图必须配两三个 Y 轴，而**双轴的刻度对齐是任意的，会凭空造出一个数据里没有的相关性**。
+分开画 + 共享时间光标（`graphTooltip: 1`），因果关系照样读得出来，而且不骗人。
+
+实测一轮 60 秒压测下这三张图上的读数：
+
+| 时刻 | 积压 | 放行阈值 | P99 |
+|---|---|---|---|
+| 积压起点 | 35,235 | 14,000 | 54.5 ms |
+| 积压峰值（10 秒后） | 61,944 | **6,860** | 33.6 ms |
+| 压测结束 | 0 | 21,825 | 0 ms |
+
+**放行阈值降 51% 是对积压上涨的反应，P99 随之回落** —— 这就是 AIMD 闭环，
+把光标在三张图上横着扫一遍就能看出来。
+
+配色不是随手挑的：多序列面板都跑过色盲可分辨性校验。
+第一版按语义配色（成交=绿、限流拒绝=橙）**没通过** ——
+绿 `#008300` 和橙 `#d95926` 相邻时，红绿色盲看它们的差异只有 ΔE 2.7，
+等于两条线并在一起分不开。最终的堆叠次序 orange→blue→yellow→violet→red
+最差相邻对 ΔE 19.5。
 
 ### 2. 起应用
 
