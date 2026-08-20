@@ -39,12 +39,15 @@ public class AppointmentService {
     private final HotConfigService hotConfig;
     private final SeckillMetrics metrics;
     private final PurchaseDedupe dedupe;
+    private final com.flashpilot.clinic.event.ApptEventPublisher events;
 
     public AppointmentService(AppointmentRepository appts,
                               com.flashpilot.clinic.domain.ApptPersistRepository persist,
                               StockRedisRepository stockRedis,
                               HotConfigService hotConfig, SeckillMetrics metrics,
-                              PurchaseDedupe dedupe) {
+                              PurchaseDedupe dedupe,
+                              com.flashpilot.clinic.event.ApptEventPublisher events) {
+        this.events = events;
         this.appts = appts;
         this.persist = persist;
         this.stockRedis = stockRedis;
@@ -115,13 +118,13 @@ public class AppointmentService {
         if (a.status() != ApptStatus.PENDING_PAY) {
             return Result.WRONG_STATE;
         }
-        boolean won = appts.markPaid(apptNo, LocalDateTime.now());
-        if (!won) {
+        if (!appts.markPaid(apptNo, LocalDateTime.now())) {
             // 说明刚好被超时任务抢先改成 EXPIRED 了。号源已经被它还回池子，
             // 这里绝对不能再当成支付成功，否则就是超卖。
             log.info("支付时发现单据已被超时释放 apptNo={}", apptNo);
             return Result.WRONG_STATE;
         }
+        events.publish(apptNo, "PENDING_PAY", "BOOKED", "患者支付");
         return Result.OK;
     }
 
@@ -145,6 +148,7 @@ public class AppointmentService {
         if (!appts.markRefunded(apptNo, LocalDateTime.now())) {
             return Result.WRONG_STATE;
         }
+        events.publish(apptNo, "BOOKED", "REFUNDED", "患者退号");
         releaseOne(a.scheduleId(), a.patientId(), "退号 apptNo=" + apptNo);
         return Result.OK;
     }
@@ -160,7 +164,11 @@ public class AppointmentService {
      * 都能把任何一张单标成已就诊，而 COMPLETED 是终态，标错了患者再也退不了号。
      */
     public Result complete(String apptNo) {
-        return appts.markCompleted(apptNo) ? Result.OK : Result.WRONG_STATE;
+        if (!appts.markCompleted(apptNo)) {
+            return Result.WRONG_STATE;
+        }
+        events.publish(apptNo, "BOOKED", "COMPLETED", "院方登记就诊完成");
+        return Result.OK;
     }
 
     /**
@@ -173,7 +181,11 @@ public class AppointmentService {
      * 原来暴露在患者端等于「任何人都能三次请求禁掉任意患者」，实测已复现。
      */
     public Result noShow(String apptNo) {
-        return appts.markNoShow(apptNo) ? Result.OK : Result.WRONG_STATE;
+        if (!appts.markNoShow(apptNo)) {
+            return Result.WRONG_STATE;
+        }
+        events.publish(apptNo, "BOOKED", "NO_SHOW", "院方登记失约");
+        return Result.OK;
     }
 
     /**
@@ -203,6 +215,7 @@ public class AppointmentService {
             // markNoShow 是条件更新（WHERE status='BOOKED'），抢不到说明这张单
             // 刚被别的路径改了状态（比如运营手工标记），跳过即可。
             if (appts.markNoShow(a.apptNo())) {
+                events.publish(a.apptNo(), "BOOKED", "NO_SHOW", "失约扫描");
                 marked++;
             }
         }
@@ -252,6 +265,7 @@ public class AppointmentService {
         if (!appts.markExpired(apptNo, now)) {
             return false;   // 被支付或被扫描抢先，正常情况
         }
+        events.publish(apptNo, "PENDING_PAY", "EXPIRED", "支付超时（定时消息）");
         releaseOne(a.scheduleId(), a.patientId(), "支付超时（定时消息）apptNo=" + apptNo);
         return true;
     }
@@ -289,6 +303,7 @@ public class AppointmentService {
             if (!appts.markExpired(a.apptNo(), now)) {
                 continue;      // 被支付抢先了，正常情况，跳过
             }
+            events.publish(a.apptNo(), "PENDING_PAY", "EXPIRED", "支付超时（定时扫描兜底）");
             releaseOne(a.scheduleId(), a.patientId(), "支付超时 apptNo=" + a.apptNo());
             released++;
         }

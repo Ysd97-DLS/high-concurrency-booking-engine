@@ -50,6 +50,8 @@ public class AdminController {
     private final com.flashpilot.clinic.AppointmentService appointments;
     private final com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeoutProducer;
     private final com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer;
+    private final com.flashpilot.clinic.event.ApptEventPublisher apptEvents;
+    private final com.flashpilot.clinic.event.ApptEventConsumer apptEventAudit;
 
     public AdminController(AdminMapper adminMapper, ReleaseService release, StockRedisRepository stockRedis,
                            MetricsCollector collector, HotConfigService hotConfig,
@@ -57,7 +59,11 @@ public class AdminController {
                            ReconcileService reconcile, InstanceRegistry instances,
                            com.flashpilot.clinic.AppointmentService appointments,
                            com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeoutProducer,
-                           com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer) {
+                           com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer,
+                           com.flashpilot.clinic.event.ApptEventPublisher apptEvents,
+                           com.flashpilot.clinic.event.ApptEventConsumer apptEventAudit) {
+        this.apptEvents = apptEvents;
+        this.apptEventAudit = apptEventAudit;
         this.appointments = appointments;
         this.payTimeoutProducer = payTimeoutProducer;
         this.payTimeoutConsumer = payTimeoutConsumer;
@@ -176,6 +182,17 @@ public class AdminController {
         expiry.put("alreadySettledOnArrival", payTimeoutConsumer.alreadySettledCount());
         m.put("payTimeout", expiry);
 
+        // 预约状态变更的顺序消息。outOfOrder **正常必须恒为 0** ——
+        // 顺序保证依赖「生产端按凭证号选队列 + 消费端 ORDERLY」两半都对，
+        // 任何一半被改掉都不会报错，只会静默乱序。这个计数是唯一的哨兵。
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("published", apptEvents.publishedCount());
+        ev.put("publishFailed", apptEvents.failedCount());
+        ev.put("consumed", apptEventAudit.consumedCount());
+        ev.put("outOfOrder", apptEventAudit.outOfOrderCount());
+        ev.put("timeline", apptEventAudit.recent(10));
+        m.put("apptEvents", ev);
+
         // 数据面与控制面指标
         MetricsSnapshot snap = collector.latest();
         Map<String, Object> perf = new LinkedHashMap<>();
@@ -196,6 +213,9 @@ public class AdminController {
         risk.put("slowLanePassed", slowLane.passedCount());
         risk.put("slowLaneDropped", slowLane.droppedCount());
         risk.put("cmsMemoryKb", riskControl.cmsMemoryBytes() / 1024);
+        // 非零说明看板上的风控命中数是**偏低**的 —— 队列满时丢了审计留档。
+        // 而队列最可能被打满的时刻恰好是攻击进行时，所以这个数必须露出来。
+        risk.put("eventsDropped", riskControl.eventsDroppedCount());
         // 噪声底和「判据是否可信」：CMS 的估计值天然含有约 事件数/width 个别人的计数，
         // 这个数接近阈值时频次判据就从「识别高频」退化成「命中所有人」，
         // 而这个退化在成交数和误拒率上都看不出来。必须让运维直接看到。

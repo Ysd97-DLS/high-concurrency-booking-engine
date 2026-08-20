@@ -64,14 +64,25 @@
         UPDATE t_patient SET blocked_until=NULL, no_show_count=0 WHERE id=#{id}
     </update>
 
+    <!--
+      这两条**刻意不起驼峰别名**，列名原样返回。
+
+      迁 MyBatis 时我顺手加了 AS totalSlots 之类的别名，结果把 ReleaseService
+      里 7 处 row.get("total_slots") 全打成 null —— 放号、分批放号、放号进度
+      三个功能同时 NPE，而单元测试和患者旅程都碰不到它们，
+      是后来点开运营看板才发现的。
+
+      教训：**返回 Map 的查询，列名就是接口契约**。改别名等于改接口，
+      而这种改动编译器一个字都不会说 —— 和这个项目里其它「字段名错了但没人报错」
+      的缺陷是同一个形状（前端读 guardNote 而后端叫 note、脚本读 $s.id 而字段是 scheduleId）。
+    -->
     <select id="scheduleReleaseState" resultType="java.util.LinkedHashMap">
-        SELECT total_slots AS totalSlots, released_slots AS releasedSlots, status
+        SELECT total_slots, released_slots, status
           FROM t_schedule WHERE id=#{scheduleId}
     </select>
 
     <select id="scheduleProgress" resultType="java.util.LinkedHashMap">
-        SELECT total_slots AS totalSlots, released_slots AS releasedSlots,
-               booked_slots AS bookedSlots, status
+        SELECT total_slots, released_slots, booked_slots, status
           FROM t_schedule WHERE id=#{scheduleId}
     </select>
 

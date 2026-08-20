@@ -121,6 +121,8 @@ public class RiskControlService {
 
     private final AtomicLong demoted = new AtomicLong();
     private final AtomicLong blocked = new AtomicLong();
+    /** 队列满时丢弃的审计记录数。**必须暴露到看板** —— 见 enqueue() 里的说明。 */
+    private final AtomicLong eventsDropped = new AtomicLong();
 
     /** 待写库的风控事件。热路径只入队，落库交给定时任务批量做。 */
     private final java.util.concurrent.ConcurrentLinkedQueue<RiskEventMapper.RiskEvent> eventQueue =
@@ -208,6 +210,23 @@ public class RiskControlService {
     private void enqueue(long patientId, String deviceId, String level, String action, String reason) {
         if (eventQueue.size() < 20_000) {
             eventQueue.add(new RiskEventMapper.RiskEvent(patientId, deviceId, level, action, reason));
+            return;
+        }
+        // 队列满了只能丢，但**不能静默地丢**。
+        //
+        // 这里刻意不改成走 MQ：这条路径在 3 万 req/s 的热路径上，
+        // 而整个三层库存设计的前提就是热路径不做网络往返 ——
+        // 为了保住审计记录给它加一次 broker 往返，等于把省下来的 RTT 又还回去。
+        //
+        // 但原来的写法（队列满就 else 什么都不做）有个更糟的性质：
+        // **队列最可能被打满的时刻，恰好是黄牛正在攻击、审计记录最有价值的时刻**，
+        // 而那时它一声不吭。于是事后复盘会看到「风控命中数」凭空缺一段，
+        // 却没有任何线索说明缺的是记录而不是攻击停了。
+        long n = eventsDropped.incrementAndGet();
+        if (n == 1 || n % 10_000 == 0) {
+            log.warn("风控事件队列已满（{}），累计丢弃 {} 条审计记录 —— "
+                    + "风控判据本身仍在正常工作，丢的只是留档。"
+                    + "看板的 riskEventsDropped 会同步上涨", eventQueue.size(), n);
         }
     }
 
@@ -252,6 +271,11 @@ public class RiskControlService {
             // 刷新失败保留上一份，不要清空 —— 清空等于放开所有黑名单
             log.warn("黑名单刷新失败，保留上一份（{} 人）：{}", blockedPatients.size(), e.toString());
         }
+    }
+
+    /** 因队列满而丢弃的风控审计记录数。非零意味着看板上的风控命中数是**偏低**的。 */
+    public long eventsDroppedCount() {
+        return eventsDropped.get();
     }
 
     public long demotedCount() {
