@@ -64,6 +64,9 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"
 
+# 身份工具：抢号和「我的预约」现在都要求 X-Patient-Token。
+. "$PSScriptRoot/lib/PatientToken.ps1"
+
 function Section($t) {
     Write-Host ""
     Write-Host "=== $t ===" -ForegroundColor Cyan
@@ -110,10 +113,13 @@ try {
 # 抢一个号，读它的支付时限，反推 pay-minutes 实际生效的值
 $probeHolder = 999000001
 try {
-    Invoke-RestMethod -Uri "$BaseUrl/verify/preheat?poolId=$ScheduleId&totalStock=100&buckets=8" -Method Post -TimeoutSec 30 | Out-Null
-    Invoke-RestMethod -Uri "$BaseUrl/seckill/$ScheduleId`?holderId=$probeHolder" -Method Post -TimeoutSec 10 | Out-Null
+    Invoke-RestMethod -Uri "$BaseUrl/verify/preheat?poolId=$ScheduleId&totalStock=100&buckets=8" -Method Post -TimeoutSec 30 -Headers (Admin-Headers) | Out-Null
+    # 探测单的身份走签名令牌。注意「我的预约」也不再接受 ?patientId= ——
+    # 它原来让任何人都能翻出任意患者的全部预约（含凭证号）。
+    $probeHeaders = Patient-Headers $probeHolder
+    Invoke-RestMethod -Uri "$BaseUrl/seckill/$ScheduleId" -Method Post -TimeoutSec 10 -Headers $probeHeaders | Out-Null
     Start-Sleep -Seconds 2
-    $appts = Invoke-RestMethod -Uri "$BaseUrl/clinic/appointments?patientId=$probeHolder&limit=1" -TimeoutSec 10
+    $appts = Invoke-RestMethod -Uri "$BaseUrl/clinic/appointments?limit=1" -TimeoutSec 10 -Headers $probeHeaders
     if (-not $appts -or $appts.Count -eq 0) { throw "探测单没落库" }
     $deadlineMs = [long]$appts[0].payDeadlineMs
     $nowMs = [long](([DateTimeOffset](Get-Date)).ToUnixTimeMilliseconds())

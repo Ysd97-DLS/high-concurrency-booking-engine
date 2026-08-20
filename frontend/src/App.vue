@@ -9,20 +9,56 @@
  * 什么时候该上状态管理库？当共享状态开始有「派生计算」和「跨页面同步修改」
  * 需求的时候。现在还没到，提前引入只会增加理解成本。
  */
-import { ref, provide, inject, watch } from 'vue'
+import { ref, provide, inject, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 // 图标要显式 import。unplugin 能自动处理 <el-xxx> 组件，
 // 但 @element-plus/icons-vue 的图标是普通组件，需要手动引。
 import { QuestionFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { identify } from './api/client'
 
 const route = useRoute()
 const elLocale = inject('elLocale')
 
-// 演示用的患者 ID。真实系统这里是登录态（患者身份从 token 里取，前端不可篡改）。
 const patientId = ref(Number(localStorage.getItem('fp-patient') || 1001))
 watch(patientId, (v) => localStorage.setItem('fp-patient', String(v)))
 
+/**
+ * 换取患者令牌。
+ *
+ * 这里是这次安全修复在前端最直观的一处变化：**前端不再「声明」自己是谁，
+ * 而是向服务端「换取」一个签名身份**。之后所有请求带的是令牌，
+ * 后端从令牌里解出 patientId —— 前端改掉这个输入框也只能换来另一个合法身份，
+ * 没法冒充、也没法拿别人的凭证号去退号。
+ *
+ * 老实说清界限：`/clinic/identify` 本身是**演示桩**，它不验证凭据，
+ * 谁来要都给签。真实系统那里必须是密码或短信验证码。
+ * 这次修的是「身份由谁签发」这个结构问题，不是把登录做完。
+ */
+const authing = ref(false)
+
+async function refreshIdentity() {
+  authing.value = true
+  try {
+    await identify(patientId.value)
+  } catch (e) {
+    // 429 是签发限流（每分钟每 IP 20 次）。这里要说清是什么，
+    // 否则用户会以为是挂号本身出了问题、接着疯狂点重试。
+    ElMessage.error(e.status === 429
+      ? '身份切换过于频繁，请稍候再试'
+      : '获取患者身份失败：' + e.message)
+  } finally {
+    authing.value = false
+  }
+}
+
+onMounted(refreshIdentity)
+// 切换演示患者时重新换令牌。**必须等新令牌到手再让页面发请求** ——
+// 否则会拿着上一个患者的令牌去查「我的预约」，看到的是别人的单子。
+watch(patientId, refreshIdentity)
+
 provide('patientId', patientId)
+provide('authing', authing)
 </script>
 
 <template>

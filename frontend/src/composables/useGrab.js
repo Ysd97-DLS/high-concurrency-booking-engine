@@ -46,7 +46,7 @@ export function useGrab() {
    * 服务端的解法是"看趋势不看水位"，客户端的解法是"随机化重试时刻"，
    * 本质都是给反馈环加阻尼。
    */
-  async function grab(poolId, holderId, { maxRetry = 5, onRetry } = {}) {
+  async function grab(poolId, { maxRetry = 5, onRetry } = {}) {
     if (inFlight.value.has(poolId)) {
       return { code: -1, message: '正在处理中，请勿重复点击' }
     }
@@ -55,7 +55,7 @@ export function useGrab() {
 
     try {
       for (let attempt = 0; attempt <= maxRetry; attempt++) {
-        const r = await grabApi.grab(poolId, holderId, deviceId())
+        const r = await grabApi.grab(poolId, deviceId())
 
         // 两种"稍后再试"要分开处理：
         //   4290 限流   —— 系统忙，重试大概率成功，正常退避

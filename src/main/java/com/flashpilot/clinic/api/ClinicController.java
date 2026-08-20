@@ -15,9 +15,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.flashpilot.clinic.AppointmentService;
+import com.flashpilot.clinic.auth.PatientIdentity;
 import com.flashpilot.clinic.domain.Appointment;
 import com.flashpilot.clinic.domain.AppointmentRepository;
 import com.flashpilot.clinic.domain.ScheduleRepository;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * 患者端接口。
@@ -33,12 +36,14 @@ public class ClinicController {
     private final ScheduleRepository schedules;
     private final AppointmentRepository appts;
     private final AppointmentService service;
+    private final PatientIdentity identity;
 
     public ClinicController(ScheduleRepository schedules, AppointmentRepository appts,
-                            AppointmentService service) {
+                            AppointmentService service, PatientIdentity identity) {
         this.schedules = schedules;
         this.appts = appts;
         this.service = service;
+        this.identity = identity;
     }
 
     /**
@@ -74,9 +79,18 @@ public class ClinicController {
         return schedules.listOpen(departmentId, d);
     }
 
+    /**
+     * 我的预约。
+     *
+     * <p><b>患者身份来自签名令牌，不再是 {@code ?patientId=} 参数。</b>
+     * 原来那个写法让任何人都能翻出任意患者的全部预约 —— 17 个字段，
+     * 含就诊日期、医生、科室、凭证号。而凭证号一旦泄露，配上原来无校验的退号接口，
+     * 就是一条完整的攻击链：<b>枚举患者 → 拿到凭证号 → 退掉他的号</b>。
+     */
     @GetMapping("/appointments")
-    public List<Map<String, Object>> myAppointments(@RequestParam long patientId,
-                                                    @RequestParam(defaultValue = "20") int limit) {
+    public List<Map<String, Object>> myAppointments(@RequestParam(defaultValue = "20") int limit,
+                                                    HttpServletRequest request) {
+        long patientId = identity.require(request);
         List<Appointment> list = appts.findByPatient(patientId, limit);
         // 一次把所有涉及的排班信息取回来，避免 N+1。见 ScheduleRepository#viewByIds
         Map<Long, Map<String, Object>> extra = schedules.viewByIds(
@@ -84,10 +98,20 @@ public class ClinicController {
         return list.stream().map(a -> toView(a, extra.get(a.scheduleId()))).toList();
     }
 
+    /**
+     * 单据详情。
+     *
+     * <p>同样要校验归属，理由和退号一样：这一页会返回就诊日期、医生、科室、费用。
+     * 「只读接口不用管权限」是个常见误判 —— 泄露的信息本身就是攻击链的第一环。
+     *
+     * <p>不是自己的单返回 {@code found: false}，和「真的不存在」不可区分，
+     * 免得凭证号被枚举出来。
+     */
     @GetMapping("/appointments/{apptNo}")
-    public Map<String, Object> detail(@PathVariable String apptNo) {
+    public Map<String, Object> detail(@PathVariable String apptNo, HttpServletRequest request) {
+        long patientId = identity.require(request);
         Appointment a = appts.findByApptNo(apptNo);
-        if (a == null) {
+        if (a == null || a.patientId() != patientId) {
             return Map.of("found", false);
         }
         return toView(a, schedules.viewByIds(Set.of(a.scheduleId())).get(a.scheduleId()));
@@ -100,26 +124,25 @@ public class ClinicController {
      * 而不是支付集成。真实网关的异步回调、对账、幂等是另一个题目。
      */
     @PostMapping("/appointments/{apptNo}/pay")
-    public Map<String, Object> pay(@PathVariable String apptNo) {
-        return reply(service.pay(apptNo), apptNo);
+    public Map<String, Object> pay(@PathVariable String apptNo, HttpServletRequest request) {
+        long patientId = identity.require(request);
+        return reply(service.pay(apptNo, patientId), apptNo, patientId);
     }
 
     @PostMapping("/appointments/{apptNo}/refund")
-    public Map<String, Object> refund(@PathVariable String apptNo) {
-        return reply(service.refund(apptNo), apptNo);
+    public Map<String, Object> refund(@PathVariable String apptNo, HttpServletRequest request) {
+        long patientId = identity.require(request);
+        return reply(service.refund(apptNo, patientId), apptNo, patientId);
     }
 
-    @PostMapping("/appointments/{apptNo}/complete")
-    public Map<String, Object> complete(@PathVariable String apptNo) {
-        return reply(service.complete(apptNo), apptNo);
-    }
+    // complete / no-show 原来在这里，现在挪到了 AdminController。
+    //
+    // 它们是<b>院方</b>操作：标记就诊完成、标记失约。放在患者端等于
+    // 「任何人都能把任意单子标成终态」，而失约累计 3 次就是 30 天禁约 ——
+    // 实测三次请求就能禁掉一个真实患者。
+    // 这不是加个所有权校验能修的：患者对自己的单也不该有这两个权限。
 
-    @PostMapping("/appointments/{apptNo}/no-show")
-    public Map<String, Object> noShow(@PathVariable String apptNo) {
-        return reply(service.noShow(apptNo), apptNo);
-    }
-
-    private Map<String, Object> reply(AppointmentService.Result r, String apptNo) {
+    private Map<String, Object> reply(AppointmentService.Result r, String apptNo, long patientId) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", r == AppointmentService.Result.OK);
         m.put("result", r.name());
@@ -130,8 +153,13 @@ public class ClinicController {
             case WRONG_STATE -> "当前状态不允许该操作（可能已被超时释放或已处理）";
             case NOT_REFUNDABLE -> "距就诊不足 2 小时，不可退号";
         });
+        // 回显当前状态时也要校验归属 —— 否则前面所有的所有权校验都白做了：
+        // 攻击者拿别人的凭证号来退号，操作本身被拒（NOT_FOUND），
+        // 但这里照样把那张单的真实状态回显出去，成了一个状态查询接口。
+        //
+        // **这就是修漏洞时最容易留下的尾巴**：主路径挡住了，回显路径忘了挡。
         Appointment a = appts.findByApptNo(apptNo);
-        if (a != null) {
+        if (a != null && a.patientId() == patientId) {
             m.put("status", a.status().name());
             m.put("statusLabel", a.status().label());
         }

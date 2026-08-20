@@ -31,7 +31,7 @@ const meta = statusMeta
 async function load() {
   loading.value = true
   try {
-    list.value = await clinicApi.myAppointments(patientId.value, 30)
+    list.value = await clinicApi.myAppointments(30)
   } catch (e) {
     ElMessage.error('加载失败：' + e.message)
   } finally {

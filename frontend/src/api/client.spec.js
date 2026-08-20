@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { adminApi, controlApi, clinicApi, CODE, CODE_TEXT } from './client'
+import {
+  adminApi, controlApi, clinicApi, grabApi, CODE, CODE_TEXT,
+  setPatientToken, getPatientToken, UnauthenticatedError
+} from './client'
 
 /**
  * 接口封装层的契约测试。
@@ -21,7 +24,7 @@ describe('api client', () => {
     calls = []
     // 只记录 URL 和 method，不关心响应内容
     vi.stubGlobal('fetch', vi.fn(async (url, options) => {
-      calls.push({ url, method: options?.method ?? 'GET' })
+      calls.push({ url, method: options?.method ?? 'GET', headers: options?.headers ?? {} })
       return { ok: true, text: async () => '{}' }
     }))
   })
@@ -32,6 +35,7 @@ describe('api client', () => {
 
   const lastUrl = () => calls[calls.length - 1].url
   const lastMethod = () => calls[calls.length - 1].method
+  const lastHeaders = () => calls[calls.length - 1].headers
 
   // ---------- 对账补偿：安全相关的默认值 ----------
 
@@ -118,6 +122,91 @@ describe('api client', () => {
     it('只有传输层错误才抛', async () => {
       vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, text: async () => '' })))
       await expect(clinicApi.departments()).rejects.toThrow(/503/)
+    })
+  })
+
+  // ---------- 患者身份 ----------
+  //
+  // 这一组守的是安全修复的前端一半。后端已经不接受 ?patientId= / ?holderId= 了，
+  // 前端要是漏了带令牌，表现是**所有操作静默 401**；
+  // 而要是漏了把身份从查询串里去掉，那只是多传一个被忽略的参数 ——
+  // 没有任何东西会报错，但很容易让人误以为身份还是前端说了算。
+
+  describe('患者身份', () => {
+    beforeEach(() => {
+      setPatientToken(null)
+    })
+
+    it('有令牌时每个请求都带上 X-Patient-Token', async () => {
+      setPatientToken('5501.sig')
+      await clinicApi.myAppointments()
+      expect(lastHeaders()['X-Patient-Token']).toBe('5501.sig')
+    })
+
+    it('没有令牌时不带这个头，而不是带一个空值', async () => {
+      // 带 `X-Patient-Token: ` 空串会让后端走验签失败分支而不是「没带令牌」分支，
+      // 两者最终都是 401，但日志里分不清是「没登录」还是「令牌被篡改」。
+      await clinicApi.departments()
+      expect(lastHeaders()['X-Patient-Token']).toBeUndefined()
+    })
+
+    it('我的预约不再传 patientId —— 身份只能来自令牌', async () => {
+      setPatientToken('5501.sig')
+      await clinicApi.myAppointments(30)
+      expect(lastUrl()).toBe('/clinic/appointments?limit=30')
+      expect(lastUrl()).not.toContain('patientId')
+    })
+
+    it('抢号不再传 holderId —— 风控的计数键不能由客户端指定', async () => {
+      setPatientToken('5501.sig')
+      await grabApi.grab(20016, 'web-abc')
+      expect(lastUrl()).toBe('/seckill/20016?deviceId=web-abc')
+      expect(lastUrl()).not.toContain('holderId')
+    })
+
+    it('就诊登记走 /admin —— 它是院方操作，不该留在患者端', async () => {
+      // 原来是 /clinic/appointments/{no}/no-show 且无校验：
+      // 调三次就能把一个真实患者禁约 30 天。
+      await adminApi.noShow('A1-1')
+      expect(lastUrl()).toBe('/admin/appointments/A1-1/no-show')
+      await adminApi.complete('A1-1')
+      expect(lastUrl()).toBe('/admin/appointments/A1-1/complete')
+    })
+
+    it('401 抛 UnauthenticatedError，并且清掉失效的令牌', async () => {
+      setPatientToken('stale.sig')
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => '{}' })))
+
+      await expect(clinicApi.myAppointments()).rejects.toBeInstanceOf(UnauthenticatedError)
+      // 留着失效令牌只会让后续每个请求都继续 401
+      expect(getPatientToken()).toBeNull()
+    })
+
+    it('401 和 5xx 是两个不同的类型 —— 重试策略相反', async () => {
+      // 401 重试一万次也没用（要去换令牌），5xx 重试大概率成功。
+      // useGrab 的退避逻辑要靠这个区分，混成一类会让用户对着 401 空转五次退避。
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, text: async () => '' })))
+      await expect(clinicApi.myAppointments()).rejects.not.toBeInstanceOf(UnauthenticatedError)
+    })
+
+    it('sessionStorage 不可用时降级到内存，不能让所有请求跟着挂', async () => {
+      // Safari 无痕、隐私设置、SSR 都可能让它不可用。
+      // 这段代码在每个请求的路径上，一次异常就是整个应用全挂 ——
+      // 而降级的代价只是「刷新页面要重新换令牌」。
+      const original = globalThis.sessionStorage
+      Object.defineProperty(globalThis, 'sessionStorage', {
+        configurable: true,
+        get() { throw new Error('SecurityError') }
+      })
+      try {
+        setPatientToken('mem.sig')
+        expect(getPatientToken()).toBe('mem.sig')
+        await clinicApi.departments()
+        expect(lastHeaders()['X-Patient-Token']).toBe('mem.sig')
+      } finally {
+        if (original === undefined) delete globalThis.sessionStorage
+        else Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: original })
+      }
     })
   })
 })

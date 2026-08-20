@@ -48,6 +48,40 @@ public final class LoadGenerator {
             int users, String profile, int timeoutMs) {
     }
 
+    /**
+     * 开压前的一次探测请求，确认签名令牌被服务端接受。
+     *
+     * <p>用一个正常范围之外的 holderId，免得这一发把某个压测用户的判重名额占掉 ——
+     * 探测本身不应该改变被测系统的状态（这次探测会真的抢掉一个号，
+     * 所以只发一发，而且不复用压测的用户空间）。
+     */
+    private static void preflight(HttpClient client, Config cfg, byte[] secret) throws Exception {
+        long probeHolder = 900_000_000L;
+        HttpRequest probe = HttpRequest.newBuilder(
+                        URI.create(cfg.baseUrl() + "/seckill/" + cfg.poolId()))
+                .timeout(Duration.ofSeconds(5))
+                .header(com.flashpilot.clinic.auth.PatientIdentity.HEADER,
+                        com.flashpilot.clinic.auth.PatientToken.issue(probeHolder, secret))
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        HttpResponse<String> r = client.send(probe, HttpResponse.BodyHandlers.ofString());
+        if (r.statusCode() == 401) {
+            System.err.printf("""
+                    ✗ 自检失败：服务端拒绝了压测端签发的令牌（401）
+                      两边的 PATIENT_TOKEN_SECRET 不一致。注意服务端如果启动时没设这个变量，
+                      它会**随机生成**一个密钥（启动日志里有红字警告），那样永远对不上。
+                      现在的做法：先设好环境变量，再启动服务端，再跑压测。
+                      服务端响应：%s
+                    %n""", r.body());
+            System.exit(3);
+        }
+        if (r.statusCode() != 200) {
+            System.err.printf("✗ 自检失败：HTTP %d —— %s%n", r.statusCode(), r.body());
+            System.exit(3);
+        }
+        System.out.printf("自检通过：令牌被接受，服务端回应 %s%n%n", r.body());
+    }
+
     public static void main(String[] args) throws Exception {
         Config cfg = parse(args);
         System.out.printf("""
@@ -62,10 +96,36 @@ public final class LoadGenerator {
                 %n""", cfg.baseUrl(), cfg.poolId(), cfg.concurrency(),
                 cfg.durationSeconds(), cfg.users(), describeProfile(cfg.profile()));
 
+        // 压测端自己签患者令牌，所以必须和服务端用同一个密钥。
+        //
+        // 缺了它直接退出而不是「先跑起来再说」：不然每个请求都是 401，
+        // 压测会顺利跑完并报出一个漂亮的高 QPS —— 因为服务端在准入阶段就返回了，
+        // 根本没碰 Redis。**一次什么都没测到的压测比压测失败危险得多。**
+        String secretText = System.getenv("PATIENT_TOKEN_SECRET");
+        if (secretText == null || secretText.isBlank()) {
+            System.err.println("""
+                    ✗ 缺少环境变量 PATIENT_TOKEN_SECRET
+                      抢号接口的身份来自 HMAC 签名令牌（不再是 ?holderId= 参数），
+                      压测端要用同一个密钥自己签，所以两边必须设成一样的值：
+                        $env:PATIENT_TOKEN_SECRET = "bench-secret"     # 启动服务端之前
+                        $env:PATIENT_TOKEN_SECRET = "bench-secret"     # 再跑这个压测器
+                      为什么不给个默认值：那等于所有部署共享同一个签名密钥。""");
+            System.exit(2);
+        }
+        final byte[] secret = secretText.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(3))
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
+
+        // 开压之前先探一发，确认令牌真的被服务端接受。
+        //
+        // 这个自检的价值不在于省时间，在于**它排除了一整类静默失败**：
+        // 密钥两边不一致时，每个请求都在准入阶段被 401 挡掉、根本不碰 Redis，
+        // 于是压测跑完给出一个非常漂亮的高 QPS 和极低 P99 —— 而实际什么都没测。
+        // 这类「成功地测了个空」的结果一旦进了实验报告，是查不出来的。
+        preflight(client, cfg, secret);
 
         Map<String, AtomicLong> counters = new HashMap<>();
         for (String k : List.of("success", "sold_out", "rate_limited", "risk_dropped",
@@ -106,9 +166,16 @@ public final class LoadGenerator {
 
                 while (System.nanoTime() < deadline) {
                     long holderId = nextUserId(cfg, threadIndex);
-                    URI uri = URI.create(cfg.baseUrl() + "/seckill/" + cfg.poolId() + "?holderId=" + holderId);
+                    URI uri = URI.create(cfg.baseUrl() + "/seckill/" + cfg.poolId());
                     HttpRequest request = HttpRequest.newBuilder(uri)
                             .timeout(Duration.ofMillis(cfg.timeoutMs()))
+                            // 身份走签名令牌，不再是 ?holderId= 参数。
+                            //
+                            // 压测端拿着同一个密钥自己签 —— 这正是真实压测的做法
+                            // （预认证令牌池）。签名是纯 CPU 的 HMAC，
+                            // 不会给压测端引入额外的网络往返，所以画像不受影响。
+                            .header(com.flashpilot.clinic.auth.PatientIdentity.HEADER,
+                                    com.flashpilot.clinic.auth.PatientToken.issue(holderId, secret))
                             .POST(HttpRequest.BodyPublishers.noBody())
                             .build();
                     long start = System.nanoTime();

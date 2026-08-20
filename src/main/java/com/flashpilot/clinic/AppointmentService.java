@@ -56,13 +56,59 @@ public class AppointmentService {
     public enum Result { OK, NOT_FOUND, WRONG_STATE, NOT_REFUNDABLE }
 
     /**
+     * 取出一张属于该患者的预约单，否则返回 null。
+     *
+     * <h2>为什么这个方法必须存在</h2>
+     *
+     * 在它出现之前，{@code refund(apptNo)} / {@code noShow(apptNo)}
+     * <b>完全不校验调用者是谁</b>，而凭证号的格式是 {@code A{poolId}-{seq}} ——
+     * 完全可枚举。实测：
+     * <pre>
+     * POST /clinic/appointments/A20006-37/refund
+     *   → {"ok":true,"result":"OK","status":"REFUNDED"}       别人的号被退掉了
+     * POST /clinic/appointments/A20011-3/no-show   ×3
+     *   → 患者 8801 的 no_show_count 0 → 1 → 2 → 3            被禁约 30 天
+     * </pre>
+     *
+     * <p>值得说清的是：<b>这不是「忘了加登录」，是设计缺陷。</b>
+     * 就算前面挂上完整的登录体系，只要业务方法的入参里只有 {@code apptNo}，
+     * 患者 A 依然能退患者 B 的号 —— 身份信息根本没进到判断里。
+     * 所以修法不是在外面加一层认证，而是<b>把「谁在操作」变成业务方法的必需参数</b>。
+     *
+     * <h2>为什么「不是你的」和「不存在」返回同一个结果</h2>
+     *
+     * 如果两者区分开，攻击者可以拿这个差异<b>枚举出哪些凭证号真实存在</b>
+     * （不存在→NOT_FOUND，别人的→NOT_YOURS），从而摸出号池的真实成交量和患者活跃度。
+     * 所以 {@code Result} 里刻意没有 {@code NOT_YOURS} 这个值 ——
+     * 对外一律 NOT_FOUND，真实原因只写进日志。
+     */
+    private Appointment findOwned(String apptNo, long callerPatientId) {
+        Appointment a = appts.findByApptNo(apptNo);
+        if (a == null) {
+            return null;
+        }
+        if (a.patientId() != callerPatientId) {
+            // 这条日志是越权尝试的唯一痕迹，必须打。用 warn 而不是 info：
+            // 正常前端永远不会构造出别人的凭证号，出现即意味着有人在手工试探。
+            log.warn("越权操作被拒：patientId={} 试图操作 apptNo={}（实际属于 patientId={}）。"
+                    + "对外返回 NOT_FOUND —— 区分「不是你的」和「不存在」会让凭证号可枚举",
+                    callerPatientId, apptNo, a.patientId());
+            return null;
+        }
+        return a;
+    }
+
+    /**
      * 支付。PENDING_PAY → BOOKED，不涉及号源变动（号本来就被这张单占着）。
      *
      * <p>用带旧状态条件的 UPDATE，所以它和超时释放任务是互斥的：
      * 谁的 affected rows 是 1 谁赢。这就是为什么不需要分布式锁。
+     *
+     * @param callerPatientId 调用者身份，来自 HMAC 签名的令牌而<b>不是</b>请求参数。
+     *                        见 {@link #findOwned}。
      */
-    public Result pay(String apptNo) {
-        Appointment a = appts.findByApptNo(apptNo);
+    public Result pay(String apptNo, long callerPatientId) {
+        Appointment a = findOwned(apptNo, callerPatientId);
         if (a == null) {
             return Result.NOT_FOUND;
         }
@@ -79,9 +125,14 @@ public class AppointmentService {
         return Result.OK;
     }
 
-    /** 患者退号。BOOKED → REFUNDED，并归还号源。 */
-    public Result refund(String apptNo) {
-        Appointment a = appts.findByApptNo(apptNo);
+    /**
+     * 患者退号。BOOKED → REFUNDED，并归还号源。
+     *
+     * @param callerPatientId 调用者身份，来自签名令牌。这是<b>整套修复里最关键的一个参数</b>——
+     *                        退号会真实归还号源、真实影响别人的就诊，见 {@link #findOwned}。
+     */
+    public Result refund(String apptNo, long callerPatientId) {
+        Appointment a = findOwned(apptNo, callerPatientId);
         if (a == null) {
             return Result.NOT_FOUND;
         }
@@ -98,7 +149,16 @@ public class AppointmentService {
         return Result.OK;
     }
 
-    /** 就诊完成。不涉及号源。 */
+    /**
+     * 就诊完成。不涉及号源。
+     *
+     * <p><b>这是院方操作，不是患者操作</b>，所以它没有 {@code callerPatientId} 参数 ——
+     * 判断「这个人有没有资格标记就诊完成」的地方在 {@code AdminGuard}，不在这里。
+     * 接口也相应从 {@code /clinic/**} 挪到了 {@code /admin/**}。
+     *
+     * <p>这一点原来是错的：{@code /clinic/appointments/{apptNo}/complete} 让任何人
+     * 都能把任何一张单标成已就诊，而 COMPLETED 是终态，标错了患者再也退不了号。
+     */
     public Result complete(String apptNo) {
         return appts.markCompleted(apptNo) ? Result.OK : Result.WRONG_STATE;
     }
@@ -108,6 +168,9 @@ public class AppointmentService {
      *
      * <p>号源的价值是「某时间点某医生的接诊能力」，时间过了就消失了，
      * 还回池子也没人能用。这一点和电商退货回库语义完全不同。
+     *
+     * <p>同样是院方操作。而它比 {@code complete} 更危险：<b>累计 3 次失约就是 30 天禁约</b>，
+     * 原来暴露在患者端等于「任何人都能三次请求禁掉任意患者」，实测已复现。
      */
     public Result noShow(String apptNo) {
         return appts.markNoShow(apptNo) ? Result.OK : Result.WRONG_STATE;

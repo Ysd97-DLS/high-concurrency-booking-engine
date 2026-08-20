@@ -10,17 +10,43 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.flashpilot.clinic.auth.PatientIdentity;
 import com.flashpilot.config.InstanceIdentity;
 import com.flashpilot.controlplane.config.ConfigParam;
 import com.flashpilot.controlplane.config.HotConfigService;
 import com.flashpilot.dataplane.stock.LocalSegmentManager;
 import com.flashpilot.dataplane.stock.StockRedisRepository;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 /**
- * 秒杀接口。
+ * 抢号接口 —— 引擎热路径。
  *
- * <p>{@code holderId} 走请求参数是为了压测方便（wrk 脚本可以直接造不同用户）。
- * 真实系统里当然应该从登录态里取，绝不能让客户端自己报。
+ * <h2>{@code holderId} 为什么不再走请求参数</h2>
+ *
+ * 原来的签名是 {@code seckill(poolId, @RequestParam long holderId, deviceId)}，
+ * 代码注释还写着「真实系统里当然应该从登录态里取」—— <b>而它就是那个真实系统的样子</b>。
+ * 注释承认了问题却把实现留在原地，实测一个编造的 ID 就能抢到号：
+ * <pre>
+ * POST /seckill/20016?holderId=999999999
+ *   → {"code":200,"message":"抢购成功，订单正在生成"}
+ * </pre>
+ *
+ * <p>真正严重的不是冒充，是<b>风控被整体绕过</b>：CMS 三层频次判据、设备维度阈值、
+ * 失约黑名单，全部以 holderId 为计数键。每次请求换一个随机 holderId，
+ * 每个 ID 的计数都是 1，<b>永远碰不到任何阈值</b> —— 一个号贩子可以匀速刷空整个号池，
+ * 而看板上看到的是「几万个正常患者各抢了一次」。
+ *
+ * <p>所以身份改为从 HMAC 签名令牌里解出（见 {@link PatientIdentity}）。
+ * 热路径上多出来的开销是一次 HMAC 计算 —— 纯 CPU、零 IO、微秒级，
+ * 和它挡住的东西相比不值一提。
+ *
+ * <h2>压测怎么办</h2>
+ *
+ * 压测端拿着同一个密钥自己签令牌（{@code PATIENT_TOKEN_SECRET} 环境变量），
+ * 预生成一批令牌轮着用 —— 真实压测本来就是这么做的（预认证令牌池）。
+ * <b>刻意没有开「压测模式跳过校验」的后门</b>：那种开关最终一定会在某个环境里
+ * 忘记关掉，而它长得就像一个正常配置项。
  */
 @RestController
 public class SeckillController {
@@ -30,21 +56,24 @@ public class SeckillController {
     private final StockRedisRepository stockRedis;
     private final HotConfigService hotConfig;
     private final InstanceIdentity identity;
+    private final PatientIdentity patients;
 
     public SeckillController(SeckillService seckillService, LocalSegmentManager segments,
                              StockRedisRepository stockRedis, HotConfigService hotConfig,
-                             InstanceIdentity identity) {
+                             InstanceIdentity identity, PatientIdentity patients) {
         this.seckillService = seckillService;
         this.segments = segments;
         this.stockRedis = stockRedis;
         this.hotConfig = hotConfig;
         this.identity = identity;
+        this.patients = patients;
     }
 
     @PostMapping("/seckill/{poolId}")
     public ResponseEntity<Map<String, Object>> seckill(@PathVariable long poolId,
-                                                       @RequestParam long holderId,
-                                                       @RequestParam(required = false) String deviceId) {
+                                                       @RequestParam(required = false) String deviceId,
+                                                       HttpServletRequest request) {
+        long holderId = patients.require(request);
         SeckillOutcome outcome = seckillService.seckill(poolId, holderId, deviceId);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", outcome.code());

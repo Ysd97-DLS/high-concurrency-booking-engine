@@ -19,8 +19,10 @@ vi.mock('@/api/client', () => ({
   CODE_TEXT: {},
   deviceId: () => 'test-device',
   grabApi: {
-    grab: async (poolId, holderId, dev) => {
-      backend.calls.push({ poolId, holderId, dev })
+    // 签名跟着真实接口变了：holderId 不再由调用方传，
+    // 患者身份由服务端从签名令牌里解出（见 client.js 的 X-Patient-Token）。
+    grab: async (poolId, dev) => {
+      backend.calls.push({ poolId, dev })
       return backend.queue.shift() ?? { code: 200, message: 'ok' }
     }
   }
@@ -50,8 +52,8 @@ describe('useGrab', () => {
     backend.queue = [{ code: 200, message: 'ok' }]
 
     // 不 await 第一个，模拟「第一个请求还在飞的时候又点了一次」
-    const first = grab(1001, 7)
-    const second = await grab(1001, 7)
+    const first = grab(1001)
+    const second = await grab(1001)
 
     // 第二次必须被本地拦住，而不是发出去
     expect(second.code).toBe(-1)
@@ -65,8 +67,8 @@ describe('useGrab', () => {
     const { grab } = useGrab()
     backend.queue = [{ code: 200 }, { code: 200 }]
 
-    const a = grab(1001, 7)
-    const b = grab(1002, 7)
+    const a = grab(1001)
+    const b = grab(1002)
     await Promise.all([a, b])
 
     expect(backend.calls.map((c) => c.poolId).sort()).toEqual([1001, 1002])
@@ -87,7 +89,7 @@ describe('useGrab', () => {
     const { grabApi } = await import('@/api/client')
     const spy = vi.spyOn(grabApi, 'grab').mockRejectedValueOnce(new Error('boom'))
 
-    await expect(grab(1001, 7)).rejects.toThrow('boom')
+    await expect(grab(1001)).rejects.toThrow('boom')
     expect(isGrabbing(1001)).toBe(false)
     spy.mockRestore()
   })
@@ -103,7 +105,7 @@ describe('useGrab', () => {
       { code: 200, message: '抢到了' }
     ]
 
-    const p = grab(1001, 7)
+    const p = grab(1001)
     await vi.runAllTimersAsync()
     const r = await p
 
@@ -116,7 +118,7 @@ describe('useGrab', () => {
     for (const code of [CODE.SOLD_OUT, CODE.ALREADY_BOUGHT, CODE.RISK_BLOCKED]) {
       backend.calls = []
       backend.queue = [{ code }]
-      const r = await grab(2000 + code, 7)
+      const r = await grab(2000 + code)
       expect(r.code).toBe(code)
       // 售罄了重试一百次也还是售罄 —— 重试只对限流有意义
       expect(backend.calls.length).toBe(1)
@@ -128,7 +130,7 @@ describe('useGrab', () => {
     const { grab } = useGrab()
     backend.queue = Array.from({ length: 10 }, () => ({ code: CODE.RATE_LIMITED }))
 
-    const p = grab(1001, 7, { maxRetry: 3 })
+    const p = grab(1001, { maxRetry: 3 })
     await vi.runAllTimersAsync()
     const r = await p
 
@@ -150,7 +152,7 @@ describe('useGrab', () => {
       backend.calls = []
       backend.queue = [{ code: CODE.RATE_LIMITED }, { code: 200 }]
       const delays = []
-      const p = grab(1001, 7, { onRetry: (_a, _m, ms) => delays.push(ms) })
+      const p = grab(1001, { onRetry: (_a, _m, ms) => delays.push(ms) })
       await vi.runAllTimersAsync()
       await p
       return delays
@@ -169,7 +171,7 @@ describe('useGrab', () => {
     backend.queue = Array.from({ length: 5 }, () => ({ code: CODE.RATE_LIMITED }))
     const delays = []
 
-    const p = grab(1001, 7, { maxRetry: 4, onRetry: (_a, _m, ms) => delays.push(ms) })
+    const p = grab(1001, { maxRetry: 4, onRetry: (_a, _m, ms) => delays.push(ms) })
     await vi.runAllTimersAsync()
     await p
 
@@ -193,7 +195,7 @@ describe('useGrab', () => {
       backend.calls = []
       backend.queue = [{ code }, { code: 200 }]
       let d = 0
-      const p = grab(1001, 7, { onRetry: (_a, _m, ms) => { d = ms } })
+      const p = grab(1001, { onRetry: (_a, _m, ms) => { d = ms } })
       await vi.runAllTimersAsync()
       await p
       return d
@@ -212,7 +214,7 @@ describe('useGrab', () => {
     backend.queue = [{ code: CODE.RATE_LIMITED }, { code: CODE.RATE_LIMITED }, { code: 200 }]
 
     const seen = []
-    const p = grab(1001, 7, { onRetry: (attempt, max) => seen.push([attempt, max]) })
+    const p = grab(1001, { onRetry: (attempt, max) => seen.push([attempt, max]) })
     await vi.runAllTimersAsync()
     await p
 

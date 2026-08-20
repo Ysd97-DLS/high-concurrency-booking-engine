@@ -47,11 +47,14 @@ public class AdminController {
     private final SlowLane slowLane;
     private final ReconcileService reconcile;
     private final InstanceRegistry instances;
+    private final com.flashpilot.clinic.AppointmentService appointments;
 
     public AdminController(JdbcTemplate jdbc, ReleaseService release, StockRedisRepository stockRedis,
                            MetricsCollector collector, HotConfigService hotConfig,
                            ConfigAuditRepository audit, RiskControlService riskControl, SlowLane slowLane,
-                           ReconcileService reconcile, InstanceRegistry instances) {
+                           ReconcileService reconcile, InstanceRegistry instances,
+                           com.flashpilot.clinic.AppointmentService appointments) {
+        this.appointments = appointments;
         this.reconcile = reconcile;
         this.instances = instances;
         this.jdbc = jdbc;
@@ -296,6 +299,45 @@ public class AdminController {
         r.put("ok", n == 1);
         r.put("message", n == 1 ? "已解除限制并清零失约次数（最长 30 秒后各实例的本地缓存刷新生效）"
                 : "患者不存在");
+        return r;
+    }
+
+    // ---------- 就诊结果登记（原来错放在患者端） ----------
+    //
+    // 这两个接口本来是 POST /clinic/appointments/{apptNo}/complete 和 /no-show，
+    // 完全无校验。后果实测：
+    //   · complete 把单子推进 COMPLETED 终态 —— 患者从此退不了号
+    //   · no-show 调三次就让一个真实患者 no_show_count 到 3 → 禁约 30 天
+    //
+    // 挪到 /admin 之后由 AdminGuard 兜住。**注意它们不是「加所有权校验」能修的**：
+    // 患者对自己的单也不该有标记就诊完成或失约的权限 —— 那是院方的判断。
+    // 「谁有权做这件事」和「这是谁的数据」是两个不同的问题，
+    // 只想着后者就会把院方操作留在患者端。
+
+    /** 登记就诊完成。BOOKED → COMPLETED。 */
+    @PostMapping("/appointments/{apptNo}/complete")
+    public Map<String, Object> complete(@PathVariable String apptNo) {
+        return operatorReply(appointments.complete(apptNo), apptNo);
+    }
+
+    /**
+     * 登记失约。BOOKED → NO_SHOW，不归还号源。
+     *
+     * <p>日常由 {@code NoShowScanTask} 自动扫，这个接口是给院方手工纠正用的。
+     */
+    @PostMapping("/appointments/{apptNo}/no-show")
+    public Map<String, Object> noShow(@PathVariable String apptNo) {
+        return operatorReply(appointments.noShow(apptNo), apptNo);
+    }
+
+    private static Map<String, Object> operatorReply(
+            com.flashpilot.clinic.AppointmentService.Result result, String apptNo) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", result == com.flashpilot.clinic.AppointmentService.Result.OK);
+        r.put("result", result.name());
+        r.put("apptNo", apptNo);
+        r.put("message", result == com.flashpilot.clinic.AppointmentService.Result.OK
+                ? "已登记" : "当前状态不允许该操作（单据不存在，或已不是「已预约」状态）");
         return r;
     }
 }

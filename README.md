@@ -92,6 +92,18 @@ docker compose --profile obs up -d
 mvn spring-boot:run
 ```
 
+**要跑压测或实验脚本的话，先设这个环境变量再启动：**
+
+```powershell
+$env:PATIENT_TOKEN_SECRET = "bench-secret"
+mvn spring-boot:run
+```
+
+抢号接口的患者身份来自 HMAC 签名令牌（不再是 `?holderId=` 参数，理由见第七节），
+压测端要拿同一个密钥自己签，所以两边必须一致。**顺序很重要**：服务端启动时
+如果没读到这个变量，它会**随机生成**一个密钥（启动日志有红字警告），那样压测端签的令牌永远对不上。
+只是打开网页点一点的话不用管——前端会自己调 `/clinic/identify` 换令牌。
+
 看到 `热配置就绪` 和 `Stream 消费者启动` 就算好了。启动日志里还会有一行
 `调度池容量检查通过：15 个定时任务 / 18 个线程（余 3）`——
 那是一条会自己喊的不变量，红字就说明池子配小了（详见第五节）。
@@ -233,7 +245,7 @@ flashpilot/
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/seckill/{poolId}?holderId=&deviceId=` | 抢号。售罄/限流也返回 HTTP 200 + 业务码，避免压测工具统计成 error |
+| POST | `/seckill/{poolId}?deviceId=` | 抢号。**需要 `X-Patient-Token`**（患者身份由服务端签发，不能由客户端声明）。售罄/限流也返回 HTTP 200 + 业务码，避免压测工具统计成 error |
 | GET | `/seckill/state/{poolId}` | 库存分布、号段命中率、借调次数、桶倾斜度 |
 
 业务码：`200` 成功 / `4001` 号已售罄 / `4002` 一人一单 / `4030` 风控拉黑 / `4290` 被限流 / `5000` 内部异常。
@@ -244,15 +256,20 @@ flashpilot/
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/clinic/departments` | 科室列表 |
-| GET | `/clinic/schedules?departmentId=&date=` | 某科室某天可约排班（默认查明天） |
-| GET | `/clinic/appointments?patientId=&limit=` | 我的预约（带医生/科室，一次 IN 查询避免 N+1） |
-| GET | `/clinic/appointments/{apptNo}` | 预约详情 |
-| POST | `/clinic/appointments/{apptNo}/pay` | 模拟支付 → BOOKED |
-| POST | `/clinic/appointments/{apptNo}/refund` | 退号 → REFUNDED，号源归还号池 |
-| POST | `/clinic/appointments/{apptNo}/complete` | 就诊完成 → COMPLETED |
-| POST | `/clinic/appointments/{apptNo}/no-show` | 标记失约 → NO_SHOW（累计 3 次限制预约 30 天） |
-| GET | `/clinic/server-time` | 服务端时间，前端倒计时校准用 |
+| 方法 | 路径 | 需要令牌 | 说明 |
+|---|---|:-:|---|
+| POST | `/clinic/identify?patientId=` | — | **签发患者令牌。演示桩**，真实系统这里必须校验密码或短信验证码。按来源 IP 限流（每分钟 20 次） |
+| GET | `/clinic/departments` | — | 科室列表 |
+| GET | `/clinic/schedules?departmentId=&date=` | — | 某科室某天可约排班（默认查明天） |
+| GET | `/clinic/appointments?limit=` | ✓ | 我的预约（带医生/科室，一次 IN 查询避免 N+1）。**`patientId` 参数已移除** |
+| GET | `/clinic/appointments/{apptNo}` | ✓ | 预约详情，只能看自己的 |
+| POST | `/clinic/appointments/{apptNo}/pay` | ✓ | 模拟支付 → BOOKED |
+| POST | `/clinic/appointments/{apptNo}/refund` | ✓ | 退号 → REFUNDED，号源归还号池 |
+| GET | `/clinic/server-time` | — | 服务端时间，前端倒计时校准用 |
+
+带 ✓ 的接口要在请求头里带 `X-Patient-Token`，并且会校验**这张单是不是你的**。不是自己的单一律返回「不存在」而不是「无权限」——两者区分开的话，凭证号（格式 `A{poolId}-{seq}`，完全可枚举）就能被批量试探出来。
+
+`complete` / `no-show` 从这里搬到了 `/admin` 下：它们是**院方**操作，患者对自己的单也不该有这两个权限。
 
 ### 运营端
 
@@ -269,6 +286,10 @@ flashpilot/
 | POST | `/admin/reconcile/run?dryRun=` | 手工跑一次对账补偿，**默认 dryRun=true** |
 | GET | `/admin/reconcile/history?limit=` | 对账留档（只记真动手 / 拒绝动手 / 预演）|
 | POST | `/admin/patients/{id}/unblock` | 人工解除限制（申诉通道） |
+| POST | `/admin/appointments/{apptNo}/complete` | 登记就诊完成 → COMPLETED |
+| POST | `/admin/appointments/{apptNo}/no-show` | 登记失约 → NO_SHOW（累计 3 次限制预约 30 天）。日常由 `NoShowScanTask` 自动扫，这个接口给院方手工纠正用 |
+
+> `/admin/*`、`/verify/*`、`/control/*`、`/mcp` 全部由 `AdminGuard` 守着：**来自本机 || 令牌正确**。本地开发和压测脚本因此零摩擦，从外部访问要在 `X-Admin-Token` 里带上 `ADMIN_TOKEN`。详见下面的「安全边界」。
 
 ### 控制面
 
@@ -470,7 +491,135 @@ Start-Process java -ArgumentList "-jar","target\flashpilot-0.1.0.jar" -WindowSty
 
 ---
 
-## 七、已知缺陷与后续计划
+## 七、安全边界
+
+这一节是一次自查的结果。它值得单独写，因为**里面每一条都是实测复现的，不是「理论上可能」**——而其中最严重的两个不是配置疏漏，是设计缺陷：加一层登录也修不掉。
+
+### 修掉的
+
+**① 越权操作预约单（IDOR）**
+
+凭证号格式是 `A{poolId}-{seq}`，完全可枚举，而 `refund` / `no-show` 当时不校验调用者：
+
+```
+POST /clinic/appointments/A20006-37/refund
+  → {"ok":true,"result":"OK","status":"REFUNDED"}          退掉了别人的号
+POST /clinic/appointments/A20011-3/no-show   ×3
+  → 患者 8801 的 no_show_count 0 → 1 → 2 → 3               被禁约 30 天
+```
+
+**为什么说它不是「忘了加登录」**：就算前面挂上完整的认证，只要业务方法的入参里只有 `apptNo`，患者 A 依然能退患者 B 的号——身份根本没进到判断里。所以修法是把「谁在操作」变成业务方法的必需参数（`AppointmentService.findOwned`），而不是在外面加一层。
+
+顺带两个容易留下的尾巴也一起堵了：响应体的**状态回显**同样要校验归属（否则退号被拒但状态照样泄露，成了一个状态查询接口）；「不是你的」和「不存在」返回**同一个结果**（区分开就能枚举出哪些凭证号真实存在）。
+
+**② `holderId` 由客户端声明 —— 整套风控被一个查询参数绕过**
+
+```
+POST /seckill/20016?holderId=999999999
+  → {"code":200,"message":"抢购成功，订单正在生成"}
+```
+
+冒充只是表面。真正严重的是：**CMS 三层频次判据、设备维度阈值、失约黑名单，全部以 `holderId` 为计数键**。每次请求换一个随机值，每个 ID 的计数恒为 1，永远碰不到任何阈值——号贩子可以匀速刷空整个号池，而运营看板上显示的是「几万个正常患者各抢了一次」。
+
+修法是身份改由服务端签发的 HMAC 令牌携带（`X-Patient-Token`）。
+
+**热路径上的代价实测过**（JIT 预热后 200 万次循环）：
+
+| 指标 | 值 |
+|---|---|
+| 单次验签 | 0.439 微秒 |
+| 单核吞吐 | 2,280,355 次/秒 |
+| 占单次请求 P50（2.05 ms）的比例 | **约 0.02%** |
+
+加上它之后重跑 60000 号池的压测：吞吐 35,714 req/s、P99 16.68 ms、**五条等式全对，零超卖零少卖零消失**。这个安全边界基本是白拿的——因为验签是纯 CPU、零 IO，和「本地号段避免 Redis 往返」是同一个考虑。
+
+**③ 运维接口完全无认证**
+
+`/admin/*`、`/verify/*`、`/control/*`、`/mcp` 当时对任何来源开放。其中：
+
+| 接口 | 后果 |
+|---|---|
+| `POST /verify/preheat` | 里面有 `DELETE FROM t_appointment`——一次请求清空全部预约 |
+| `POST /control/config?param=limit.qps&value=1` | 实测护栏把它 clamp 到 100（原值 19825），**护栏限制了幅度但没有阻止未授权修改**，吞吐掉到 1/198 |
+| `POST /admin/patients/{id}/unblock` | 放出因失约被禁约的号贩子——风控里唯一「真正拒绝」的手段被撤销 |
+| `POST /admin/reconcile/run?dryRun=false` | 直接改号源账目 |
+| `POST /control/agent/tick` | 每次调用真实请求一次大模型，**按次计费**，同时是一个经济型 DoS |
+
+修法是 `AdminGuard`：**放行 = 来自本机 || 令牌正确**。本机直接放行是刻意的——能在本机发 HTTP 请求的人同样能读到配置里的令牌，对这种攻击者做 HTTP 认证是自欺欺人，而它换来本地开发和压测脚本零摩擦。**一个让本地开发变麻烦的安全措施，最后会被人用「临时关掉」的方式绕过。**
+
+**「什么算本机」比看起来复杂，两个陷阱都实测过：**
+
+⚠ **反向代理。** 本机跑 Nginx 之类时必须设 `flashpilot.admin.trust-loopback=false`：转发来的请求 `remoteAddr` 都是回环地址，于是「本机放行」把整个互联网都放进来了。这里**刻意不去读 `X-Forwarded-For` 来补救**——那个头客户端可以随便写，拿它做判据等于把钥匙交给攻击者。
+
+⚠ **Docker Desktop（Windows / macOS）。** 容器访问宿主机时流量经过 NAT，**到达应用时源地址是 `127.0.0.1`**，不是容器的 `172.17.x.x`：
+
+```
+docker run --rm curlimages/curl -X POST http://host.docker.internal:8090/admin/patients/7001/unblock
+  → AdminGuard 日志记录的源地址：127.0.0.1
+```
+
+也就是说默认配置下**本机上任何一个容器都能调运维接口**。这台机器上跑着四个容器，其中 Grafana 允许匿名访问——攻击链是存在的。要堵就设 `trust-loopback=false` 配 `ADMIN_TOKEN`。
+
+> 顺带一个方法论教训。验证这个过滤器时，「从容器里打过来被放行了」一度让我以为过滤器压根没生效。实际是**测试方法本身不成立**——那个请求并不是外部请求。换成从本机 WLAN 地址（`192.168.1.3`）打才是真的外部，结果是 403。**安全测试里「攻击成功」和「攻击路径没走通」长得一模一样，必须先证明测试用例真的构造出了目标条件。**
+
+实测的准入矩阵：
+
+| 来源 | `trust-loopback` | 令牌 | 结果 |
+|---|:-:|---|:-:|
+| `127.0.0.1` | true | 无 | 200 |
+| `192.168.1.3`（真实外部） | true | 无 | **403** |
+| 容器 → `host.docker.internal` | true | 无 | 200 ⚠ 源地址被 NAT 成回环 |
+| `127.0.0.1` | false | 无 | **403** |
+| `127.0.0.1` | false | 错 | **403** |
+| `127.0.0.1` | false | 对 | 200 |
+| `192.168.1.3` | false | 对 | 200 |
+
+**④ 基础设施端口暴露在 0.0.0.0**
+
+`docker-compose.yaml` 里 `"6379:6379"` 这种短写法**默认绑 0.0.0.0**，同网段任何机器都能直连；而 Redis 没有 `requirepass`、MySQL 的 root 密码是 `flashpilot`（仓库公开，等于没有密码）、Grafana 是 `admin/admin`。全部改成 `"127.0.0.1:6379:6379"`。
+
+选「只对本机开放」而不是「加密码」，是因为加密码要改配置、改脚本、改文档，而这里真正需要的只是别暴露出去。
+
+### 确认安全的
+
+**没有 SQL 注入。**全部走参数化查询；动态 `IN` 子句用 `nCopies(n, "?")` 生成占位符，参数始终是绑定的。grep 出来的可疑拼接全部是 `r.put("message", ... + var)`——面向用户的文案，不是 SQL。
+
+### 刻意没做的
+
+- **不上 Spring Security + OAuth。** 它会带来整套过滤器链、默认的 CSRF 与登录页行为，而这个项目要证明的是并发正确性与控制面自治。一个 60 行的过滤器解决了同样的问题，且没有隐式行为。
+- **不给密钥硬编码默认值。** `PATIENT_TOKEN_SECRET` 为空时随机生成并打红字警告。给默认值会让所有部署共享同一个签名密钥，任何人都能替任何人签发身份——**比不做认证更糟，因为它看起来是安全的**。
+- **不开「压测模式跳过校验」的后门。** 那种开关最终一定会在某个环境里忘记关掉，而它长得就像一个正常配置项。压测端改成拿同一个密钥自己签令牌（`scripts/lib/PatientToken.ps1`、`LoadGenerator.preflight`），这也是真实压测的做法（预认证令牌池）。
+- **应用自身不绑 127.0.0.1。** 看起来更安全，实际会静默弄坏可观测性：Prometheus 跑在容器里，通过 `host.docker.internal:8090` 抓宿主机上的应用，绑 loopback 之后抓取失败、Grafana 全部面板变空白——而这个项目的核心结论全靠那些面板。「看起来是安全加固、实际弄坏了项目要证明的东西」是这次自查里最该避免的一类改动。
+
+### 底线声明
+
+**这是一个演示项目，没有真实的用户体系，不要暴露到公网。** `/clinic/identify` 不校验凭据；患者令牌没有有效期也不绑设备。这次修复解决的是**结构问题**——身份由服务端签发、操作校验归属、危险接口有准入边界——把签发接口换成真实的密码/短信校验，下游代码一行都不用改。
+
+### 压测与实验脚本的变化
+
+身份改成签名令牌之后，压测端必须用同一个密钥：
+
+```powershell
+# 两边都要设，而且要先设再启动服务端
+$env:PATIENT_TOKEN_SECRET = "bench-secret"
+mvn spring-boot:run
+
+# 另开一个窗口，同样先设
+$env:PATIENT_TOKEN_SECRET = "bench-secret"
+./scripts/run-experiment.ps1
+
+# wrk 的 Lua 里没有 HMAC，改成预生成令牌池轮着用
+./scripts/gen-tokens.ps1 -Count 200000 -OutFile bench-tokens.txt
+wrk -t8 -c400 -d30s -s scripts/wrk-seckill.lua http://127.0.0.1:8090
+```
+
+`LoadGenerator` 和 wrk 脚本现在都有**开压前自检**：第一发不是预期结果就退出。这道自检是被一个真实的坑逼出来的——`wrk-seckill.lua` 拼的参数名是 `userId` 而接口收 `holderId`，于是每一发都是 400，而压测**照样跑完、照样给出延迟数字和报告**，那些数字描述的是「400 有多快」。它一直没被发现，因为它从来没在 Linux 上真跑过。
+
+> 压测脚本失败的方式不是报错，是给你一份好看的假数据。
+
+---
+
+## 八、已知缺陷与后续计划
 
 主动写出缺陷是成熟度信号，也是面试时的加分项。
 
@@ -483,14 +632,15 @@ Start-Process java -ArgumentList "-jar","target\flashpilot-0.1.0.jar" -WindowSty
 | `LOCAL` 判重依赖网关粘性路由 | 无粘性路由时会白占库存名额再回滚 | 已提供 `REDIS` 模式作为替代 |
 | 单机 Docker 部署 | 网络 RTT 被严重低估，本地号段的真实收益比测出来的更大 | 多机部署验证 |
 | 支付是模拟的（直接改状态） | 没有异步回调、对账、幂等重试 | 刻意不做：要验证的是**超时释放**，支付集成是另一个题目 |
-| 前端没有登录，患者身份靠输入框切换 | 任何人都能查任何人的预约 | 演示项目的取舍；真实系统这里要接实名认证 |
+| `/clinic/identify` 不校验凭据，谁来要都签发身份 | 演示环境里可以换成任意患者 | 刻意的：这次修的是「身份由谁签发」的结构问题，不是把登录做完。真实系统这里换成密码 / 短信验证码即可，下游代码一行不用改 |
+| 患者令牌没有有效期，也不绑设备 | 令牌泄露就等于身份泄露 | 做一半的会话管理比没有更容易让人误以为它安全，所以要么不做要么做全；见「安全边界」 |
 | L1 Agent 的三路对照实验（纯规则 / 规则+Agent / 仅 Agent）还没跑 | Agent 的实际收益缺少量化 | 需要接真实 LLM key 后跑一轮 |
 | 测试只覆盖纯逻辑单元 | Lua 脚本、Stream 消费、护栏、放号链路都没有自动化测试，靠压测脚本端到端验证 | 这几处都需要 Redis + MySQL，得上 Testcontainers。护栏（`GuardRail`）优先级最高——它是唯一允许 Agent 改生产参数的地方，而它出过一个「参数永远调不动」的缺陷 |
 | 没有组件测试 | 「点按钮后变 disabled」这类渲染行为靠手点 | 需要 jsdom + `@vue/test-utils`；逻辑复杂度不在渲染上，优先级低 |
 
 ---
 
-## 八、这个项目参考了什么
+## 九、这个项目参考了什么
 
 主动交代借鉴关系，比装原创可信得多：
 

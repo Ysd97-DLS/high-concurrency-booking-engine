@@ -2,6 +2,21 @@ server:
   # 默认用 8090 而不是惯例的 8080：本机 8080 被 ApplicationWebServer 占用。
   # 需要改回去时用环境变量覆盖即可：SERVER_PORT=8080
   port: ${SERVER_PORT:8090}
+
+  # 监听地址刻意**没有**收到 127.0.0.1。
+  #
+  # 收进去看起来更安全，实际会静默弄坏可观测性：Prometheus 跑在容器里，
+  # 通过 host.docker.internal:8090 抓宿主机上的应用（见 deploy/prometheus.yml）——
+  # 那不是回环流量，绑 loopback 之后抓取直接失败，Grafana 全部面板变空白。
+  # 而这个项目的核心结论（AIMD 因果链、P99 曲线）全靠那些面板。
+  #
+  # 「看起来是安全加固、实际弄坏了本项目要证明的东西」是这次自查里最该避免的一类改动。
+  # 危险接口由 AdminGuard 兜（/admin、/verify、/control、/mcp），
+  # 患者接口由签名令牌兜，剩下对外可见的就是本来就该公开的患者页面和 /actuator/prometheus。
+  #
+  # 真要收窄，用这个（然后记得把 prometheus 的 target 也改掉）：
+  #   address: ${SERVER_ADDRESS:0.0.0.0}
+  address: ${SERVER_ADDRESS:0.0.0.0}
   tomcat:
     threads:
       max: 400
@@ -132,7 +147,34 @@ flashpilot:
 
   # 挂号业务域。这一段的默认值都写在 FlashPilotProperties.Clinic 里，
   # 这里只显式列出「运维需要知道存在」的那几个。
+  # ---------- 准入 ----------
+  #
+  # 这一节修的是一次自查里实测复现的三类问题（细节见 README「安全边界」）：
+  #   ① 退号/失约接口不校验调用者 —— 枚举凭证号就能退掉别人的号、三次请求禁掉一个患者
+  #   ② holderId 由客户端裸传 —— 每次换一个随机 ID，整套风控的频次判据全部失效
+  #   ③ /admin、/verify、/control 完全无认证 —— 其中 /verify/preheat 里有 DELETE FROM t_appointment
+  admin:
+    # 运维接口（/admin、/verify、/control、/mcp）的令牌。
+    # 空 = 只允许本机访问，外部一律 403。本地开发和压测因此零摩擦 ——
+    # 一个让本地开发变麻烦的安全措施，最后会被人用「临时关掉」的方式绕过。
+    token: ${ADMIN_TOKEN:}
+
+    # 是否信任回环地址。
+    # ⚠ 本机跑反向代理（Nginx 等）时必须设 false：转发来的请求 remoteAddr 都是
+    #   回环地址，于是「本机放行」把整个互联网都放进来了。
+    #   这里刻意不去读 X-Forwarded-For 来补救 —— 那个头客户端可以随便写。
+    trust-loopback: ${ADMIN_TRUST_LOOPBACK:true}
+
   clinic:
+    # 患者令牌的 HMAC 密钥。空则每次启动随机生成（重启后旧令牌失效，演示环境无所谓）。
+    #
+    # **刻意不给硬编码默认值**：那会让所有部署共享同一个签名密钥，
+    # 任何人都能替任何人签发身份 —— 比不做认证更糟，因为它看起来是安全的。
+    #
+    # 压测时必须显式设置，因为压测端要用同一个密钥自己签令牌
+    # （预生成一批轮着用，见 scripts/gen-tokens.ps1）。
+    token-secret: ${PATIENT_TOKEN_SECRET:}
+
     reconcile:
       # 失约扫描间隔。把「就诊日已过却仍是 BOOKED」的单转成 NO_SHOW 并累加失约次数。
       #

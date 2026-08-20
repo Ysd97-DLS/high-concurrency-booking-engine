@@ -34,9 +34,20 @@ $ErrorActionPreference = "Continue"
 $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-function GJ($url, $method = "GET") {
+# 身份工具。抢号接口的 holderId 不再走查询参数，改成 HMAC 签名令牌 ——
+# 而这个脚本恰好是最需要说清这件事的地方：**它测的就是风控**。
+# 风控的三层频次判据全部以患者 ID 为计数键，客户端能自己报的话，
+# 每次换一个随机 ID 就让每个 ID 的计数恒为 1，整套判据永远碰不到阈值。
+# 也就是说这个 A/B 实验在修复之前，B 组只要换 ID 就能得出「风控无效」。
+. "$PSScriptRoot/lib/PatientToken.ps1"
+
+function GJ($url, $method = "GET", [long] $AsPatient = 0) {
     $p = @{ Uri = $url; TimeoutSec = 25; UseBasicParsing = $true }
     if ($method -eq "POST") { $p.Method = "Post" }
+    # 运维接口（/verify、/control）走 Admin-Headers；本机访问时它返回空表。
+    $h = Admin-Headers
+    if ($AsPatient -gt 0) { $h += Patient-Headers $AsPatient }
+    if ($h.Count -gt 0) { $p.Headers = $h }
     $r = Invoke-WebRequest @p
     return ([System.Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) | ConvertFrom-Json)
 }
@@ -76,7 +87,7 @@ Write-Host "=== A 组：$Normal 个正常患者，各自设备，每人 1 次 ==
 $aOk = 0; $aDemoted = 0; $aOther = 0
 for ($i = 1; $i -le $Normal; $i++) {
     $pid2 = 100000 + $i
-    $r = GJ "$BaseUrl/seckill/1001?holderId=$pid2&deviceId=phone-of-patient-$i" "POST"
+    $r = GJ "$BaseUrl/seckill/1001?deviceId=phone-of-patient-$i" "POST" -AsPatient $pid2
     switch ($r.code) {
         200  { $aOk++ }
         4291 { $aDemoted++ }
@@ -91,7 +102,7 @@ Write-Host "=== B 组：$Scalper 个患者，全部来自同一台设备 ===" -F
 $bOk = 0; $bDemoted = 0; $bOther = 0
 for ($i = 1; $i -le $Scalper; $i++) {
     $pid2 = 200000 + $i
-    $r = GJ "$BaseUrl/seckill/1001?holderId=$pid2&deviceId=scalper-single-device" "POST"
+    $r = GJ "$BaseUrl/seckill/1001?deviceId=scalper-single-device" "POST" -AsPatient $pid2
     switch ($r.code) {
         200  { $bOk++ }
         4291 { $bDemoted++ }

@@ -26,7 +26,7 @@ services:
     image: redis:7.4-alpine
     container_name: fp-redis-master
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     command: >
       redis-server
       --appendonly yes
@@ -40,7 +40,7 @@ services:
     depends_on:
       - redis-master
     ports:
-      - "6381:6379"
+      - "127.0.0.1:6381:6379"
     command: >
       redis-server
       --replicaof ${FP_HOST_IP} 6380
@@ -56,7 +56,7 @@ services:
       - redis-master
       - redis-replica
     ports:
-      - "26379:26379"
+      - "127.0.0.1:26379:26379"
     # 哨兵需要一个可写的配置文件（它会把发现的拓扑写回去），所以启动时先生成再拉起。
     # quorum 设成 1 因为只有一个哨兵实例；生产至少要 3 个哨兵、quorum 设 2。
     entrypoint:

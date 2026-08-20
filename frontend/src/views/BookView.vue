@@ -53,7 +53,7 @@ async function loadSchedules() {
 const leftOf = (s) => Math.max(0, s.totalSlots - s.bookedSlots)
 
 async function onGrab(s) {
-  const r = await grab(s.scheduleId, patientId.value, {
+  const r = await grab(s.scheduleId, {
     onRetry: (n, max) => ElMessage.info({ message: `排队中，第 ${n}/${max} 次重试…`, duration: 1200 })
   })
   if (!r) return

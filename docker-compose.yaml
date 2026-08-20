@@ -5,13 +5,25 @@
 #   docker compose down -v            清掉容器和数据卷
 #
 # 主从 + 哨兵（W3 的 P6 故障注入实验）在 docker-compose.ha.yaml 里，单独起。
+#
+# ⚠ 所有端口都刻意绑在 127.0.0.1 上，不是 0.0.0.0。
+#
+# 原来写的是 "6379:6379"，而 Docker 的这个短写法**默认绑 0.0.0.0** ——
+# 同网段任何一台机器都能直连。具体后果：
+#   · Redis 没有 requirepass，任何人能 FLUSHALL 或直接改库存 key
+#   · MySQL 的 root 密码是 flashpilot（仓库是公开的，等于没有密码）
+#   · Grafana 是 admin/admin
+#
+# 这是演示环境，正确的边界是「只对本机开放」而不是「加密码」：
+# 加密码要改配置、改脚本、改文档，而这里真正需要的只是别暴露出去。
+# 要从别的机器访问，得改成 "0.0.0.0:6379:6379" 并**同时**配好认证。
 
 services:
   redis:
     image: redis:7.4-alpine
     container_name: fp-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     # noeviction: 库存 key 绝对不能被淘汰，宁可写失败也不能凭空少库存
     command: >
       redis-server
@@ -31,7 +43,7 @@ services:
     image: mysql:8.4
     container_name: fp-mysql
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: flashpilot
       MYSQL_DATABASE: flashpilot
@@ -67,7 +79,7 @@ services:
     container_name: fp-prometheus
     profiles: ["obs"]
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     extra_hosts:
@@ -78,7 +90,7 @@ services:
     container_name: fp-grafana
     profiles: ["obs"]
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
