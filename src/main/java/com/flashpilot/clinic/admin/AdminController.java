@@ -52,6 +52,8 @@ public class AdminController {
     private final com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer;
     private final com.flashpilot.clinic.event.ApptEventPublisher apptEvents;
     private final com.flashpilot.clinic.event.ApptEventConsumer apptEventAudit;
+    private final com.flashpilot.clinic.event.ApptCreatedTxProducer createdTx;
+    private final com.flashpilot.clinic.risk.RiskEventMessaging riskMq;
 
     public AdminController(AdminMapper adminMapper, ReleaseService release, StockRedisRepository stockRedis,
                            MetricsCollector collector, HotConfigService hotConfig,
@@ -61,7 +63,11 @@ public class AdminController {
                            com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeoutProducer,
                            com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer,
                            com.flashpilot.clinic.event.ApptEventPublisher apptEvents,
-                           com.flashpilot.clinic.event.ApptEventConsumer apptEventAudit) {
+                           com.flashpilot.clinic.event.ApptEventConsumer apptEventAudit,
+                           com.flashpilot.clinic.event.ApptCreatedTxProducer createdTx,
+                           com.flashpilot.clinic.risk.RiskEventMessaging riskMq) {
+        this.createdTx = createdTx;
+        this.riskMq = riskMq;
         this.apptEvents = apptEvents;
         this.apptEventAudit = apptEventAudit;
         this.appointments = appointments;
@@ -192,6 +198,18 @@ public class AdminController {
         ev.put("outOfOrder", apptEventAudit.outOfOrderCount());
         ev.put("timeline", apptEventAudit.recent(10));
         m.put("apptEvents", ev);
+
+        // RocketMQ 三条链路的分别统计。分开看是必要的 —— 它们用的是三种不同的
+        // 消息类型（事务 / 定时 / 顺序 + 普通），失败模式完全不同，
+        // 合成一个「MQ 健康」指标会把「顺序乱了」和「事务回滚多」混成同一个数字。
+        Map<String, Object> mq = new LinkedHashMap<>();
+        mq.put("txCommitted", createdTx.committedCount());
+        mq.put("txRolledBack", createdTx.rolledBackCount());
+        // 持续非零说明本地事务返回过 UNKNOWN，或应用在提交前挂过 —— 值得关注
+        mq.put("txCheckedByBroker", createdTx.checkedCount());
+        mq.put("riskBatchesSent", riskMq.sentBatches());
+        mq.put("riskBatchesSendFailed", riskMq.sendFailedBatches());
+        m.put("rocketmq", mq);
 
         // 数据面与控制面指标
         MetricsSnapshot snap = collector.latest();

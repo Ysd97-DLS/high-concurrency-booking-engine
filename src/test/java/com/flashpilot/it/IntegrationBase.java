@@ -49,9 +49,16 @@ import com.redis.testcontainers.RedisContainer;
 @SpringBootTest
 public abstract class IntegrationBase {
 
-    /** {@code -Dit.containers=testcontainers} 时才由 Testcontainers 起容器。 */
+    /**
+     * 默认由 Testcontainers 起容器；{@code -Dit.containers=compose} 可改成复用
+     * {@code docker compose} 已经起好的 fp-redis / fp-mysql。
+     *
+     * <p>默认值选 Testcontainers 是因为它<b>隔离</b>：测试会 preheat 号池、写预约单，
+     * 打在开发库上会污染手头正在看的数据，而且「上一次测试留下的东西」会让
+     * 偶发失败变得难以复现。代价是每次多十几秒起容器。
+     */
     private static final boolean USE_TESTCONTAINERS =
-            "testcontainers".equalsIgnoreCase(System.getProperty("it.containers", "compose"));
+            !"compose".equalsIgnoreCase(System.getProperty("it.containers", "testcontainers"));
 
     /**
      * 建表脚本。<b>刻意不含 {@code 04-demo-data.sql}</b> ——

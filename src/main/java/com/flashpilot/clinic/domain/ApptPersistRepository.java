@@ -32,6 +32,7 @@ public class ApptPersistRepository {
 
 
     private final ApptPersistMapper mapper;
+    private final com.flashpilot.clinic.event.ApptCreatedTxProducer createdTx;
     private final com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeout;
     private final StringRedisTemplate redis;
     private final ScheduleRepository schedules;
@@ -45,7 +46,9 @@ public class ApptPersistRepository {
     public ApptPersistRepository(ApptPersistMapper mapper, StringRedisTemplate redis,
                                 ScheduleRepository schedules, AppointmentRepository appts,
                                 com.flashpilot.config.FlashPilotProperties props,
-                                com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeout) {
+                                com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeout,
+                                com.flashpilot.clinic.event.ApptCreatedTxProducer createdTx) {
+        this.createdTx = createdTx;
         this.payTimeout = payTimeout;
         this.mapper = mapper;
         this.redis = redis;
@@ -98,7 +101,12 @@ public class ApptPersistRepository {
                     deadline,
                     e.eventId()));
         }
-        int n = appts.insertPendingBatch(batch);
+        // 优先走事务消息：本地事务（插入预约）与「预约已创建」事件要么都成立、要么都不成立。
+        // MQ 不可用时 persist() 返回 -1，退回原来的直接插入 —— 中间件缺席时功能降级，不消失。
+        int n = createdTx.persist(batch);
+        if (n < 0) {
+            n = appts.insertPendingBatch(batch);
+        }
         if (n == 0 && !batch.isEmpty()) {
             diagnoseAndRealign(poolId, batch);
         }

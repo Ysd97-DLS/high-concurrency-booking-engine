@@ -100,6 +100,7 @@ public class RiskControlService {
     }
 
     private final RiskEventMapper riskEvents;
+    private final RiskEventMessaging riskMq;
     private final HotConfigService hotConfig;
     private final SeckillMetrics metrics;
 
@@ -124,11 +125,18 @@ public class RiskControlService {
     /** 队列满时丢弃的审计记录数。**必须暴露到看板** —— 见 enqueue() 里的说明。 */
     private final AtomicLong eventsDropped = new AtomicLong();
 
+    /** 单批条数。投 MQ 时一批打成一个消息，所以批大一点几乎不增加 broker 侧开销。 */
+    private static final int FLUSH_BATCH = 2000;
+    /** 一次调度里最多取几批。2000 × 10 × 每秒一次 = 2 万条/秒，和队列上限同量级。 */
+    private static final int MAX_FLUSH_ROUNDS = 10;
+
     /** 待写库的风控事件。热路径只入队，落库交给定时任务批量做。 */
     private final java.util.concurrent.ConcurrentLinkedQueue<RiskEventMapper.RiskEvent> eventQueue =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
 
-    public RiskControlService(RiskEventMapper riskEvents, HotConfigService hotConfig, SeckillMetrics metrics) {
+    public RiskControlService(RiskEventMapper riskEvents, RiskEventMessaging riskMq,
+                              HotConfigService hotConfig, SeckillMetrics metrics) {
+        this.riskMq = riskMq;
         this.riskEvents = riskEvents;
         this.hotConfig = hotConfig;
         this.metrics = metrics;
@@ -231,23 +239,47 @@ public class RiskControlService {
     }
 
     /** 批量落库风控事件。 */
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelay = 1000)
     public void flushEvents() {
         if (eventQueue.isEmpty()) {
             return;
         }
-        java.util.List<RiskEventMapper.RiskEvent> batch = new java.util.ArrayList<>(500);
-        RiskEventMapper.RiskEvent e;
-        while (batch.size() < 500 && (e = eventQueue.poll()) != null) {
-            batch.add(e);
-        }
-        if (batch.isEmpty()) {
-            return;
-        }
-        try {
-            riskEvents.insertBatch(batch);
-        } catch (Exception ex) {
-            log.warn("风控事件落库失败，丢弃这批 {} 条：{}", batch.size(), ex.toString());
+        // 一轮取多批，取空为止（或到上限）。
+        //
+        // **原来是「每 2 秒取 500 条」，也就是吞吐上限 250 条/秒。**
+        // 而风控命中在压测下每秒能产生几千条，于是队列必然涨满、
+        // 触发入队处那道 20000 的闸门开始丢弃 —— 加了丢弃计数之后立刻看到
+        // 一次 8 秒的小压测就丢了 2679 条。
+        //
+        // 也就是说丢弃的根因是**冲刷速率不够**，不是「MySQL 慢」。
+        // 这一点值得记：把落库目标从 MySQL 换成 MQ 并不能解决它 ——
+        // 换目标解决的是「下游慢时不回压」，而这里是**上游取得太慢**，
+        // 两个问题长得像，修法完全不同。
+        int rounds = 0;
+        while (rounds++ < MAX_FLUSH_ROUNDS) {
+            java.util.List<RiskEventMapper.RiskEvent> batch = new java.util.ArrayList<>(FLUSH_BATCH);
+            RiskEventMapper.RiskEvent e;
+            while (batch.size() < FLUSH_BATCH && (e = eventQueue.poll()) != null) {
+                batch.add(e);
+            }
+            if (batch.isEmpty()) {
+                return;
+            }
+            // 先投 MQ；MQ 不可用或投递失败时退回直接落库。
+            //
+            // **两条路都留着**是刻意的：MQ 带来的是「MySQL 慢时不回压到应用内存」，
+            // 而不是「没有 MQ 就不能记审计」。中间件缺席时功能应该降级，不是消失 ——
+            // 这和支付超时那条链路（消息为主、定时扫描兜底）是同一个结构。
+            if (!riskMq.publish(batch)) {
+                try {
+                    riskEvents.insertBatch(batch);
+                } catch (Exception ex) {
+                    log.warn("风控事件落库失败，丢弃这批 {} 条：{}", batch.size(), ex.toString());
+                }
+            }
+            if (batch.size() < FLUSH_BATCH) {
+                return;      // 没取满说明队列已空
+            }
         }
     }
 

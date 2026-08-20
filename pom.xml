@@ -104,6 +104,25 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Testcontainers 用的 docker-java 默认按 API v1.32 请求，
+                             而较新的守护进程 MinAPIVersion 已经是 1.40
+                             （实测 Docker Desktop 4.78 / Engine 29.5.3：
+                              /v1.32/info 返回 400，/v1.40/info 返回 200）。
+
+                             400 的响应体恰好是个**字段全零的 Info 结构**，还带着
+                             com.docker.desktop.address=npipe://... 标签，看起来极像
+                             「连错了管道」—— 我因此在传输方式上白折腾了很久，
+                             实际 npipe 和 tcp 两条路都是同样的 400，和传输无关。
+
+                             注意这个值**只有系统属性认**：
+                             DOCKER_API_VERSION 环境变量和 ~/.testcontainers.properties
+                             里的 api.version 都不生效（实测 docker-java 照旧请求 v1.32），
+                             必须走 docker-java 的 api.version 系统属性。 -->
+                        <api.version>1.44</api.version>
+                    </systemPropertyVariables>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
