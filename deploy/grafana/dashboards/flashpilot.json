@@ -267,7 +267,7 @@
             "drawStyle": "line",
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "fillOpacity": 18,
+            "fillOpacity": 12,
             "showPoints": "never",
             "pointSize": 8,
             "spanNulls": true,
@@ -348,7 +348,7 @@
             "drawStyle": "line",
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "fillOpacity": 18,
+            "fillOpacity": 8,
             "showPoints": "never",
             "pointSize": 8,
             "spanNulls": true,
@@ -423,7 +423,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "decimals": 4,
+          "decimals": null,
           "min": 0,
           "custom": {
             "drawStyle": "line",
