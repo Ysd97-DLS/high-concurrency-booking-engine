@@ -84,6 +84,10 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      # 打开 localhost:3000 直接进控制面板，不用先看那页「Welcome to Grafana」教程。
+      # 路径是容器内的路径 —— provisioning 目录挂在 /etc/grafana/provisioning，
+      # 所以 dashboard JSON 在容器里的位置是这个，不是宿主机的 deploy/。
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/flashpilot.json
     volumes:
       - ./deploy/grafana:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
