@@ -90,6 +90,22 @@ logging:
     root: INFO
     com.flashpilot: INFO
 
+# ---------- RocketMQ ----------
+#
+# 只用于支付超时释放的**定时消息**，刻意不替换 Redis Stream ——
+# 抢号那条链路的 XADD 写在 sell_one.lua 里、和扣租约是同一个原子操作，
+# 拆开就是双写问题（扣了库存消息没发 = 少卖；发了消息没扣 = 超卖）。
+#
+# name-server 为空时整个 RocketMQ 自动装配不生效，超时释放退化成纯定时扫描 ——
+# 也就是说**不起 RocketMQ 也能跑**，只是释放不那么及时。
+rocketmq:
+  name-server: ${ROCKETMQ_NAMESRV:127.0.0.1:9876}
+  producer:
+    group: fp-pay-timeout-producer
+    # 投递失败不重试：这条链路有定时扫描兜底，重试只会拖慢落库线程。
+    retry-times-when-send-failed: 0
+    send-message-timeout: 3000
+
 # ---------- 持久层 ----------
 #
 # MyBatis 负责领域 CRUD 与动态 SQL（三处手搓 IN 占位符换成 <foreach>，
@@ -181,6 +197,12 @@ flashpilot:
     trust-loopback: ${ADMIN_TRUST_LOOPBACK:true}
 
   clinic:
+    # ⚠ 下面 pay-minutes / no-show-scan-ms 必须直接挂在 clinic 下，**不能缩进到 reconcile 里**。
+    #    它们声明在 FlashPilotProperties.Clinic 记录上，绑定路径就是 flashpilot.clinic.*。
+    #    曾经被误写进 reconcile 块，于是**两年都没生效过**：Spring Boot 对多余的嵌套键
+    #    静默忽略，不报错、不告警，配置看起来在那里而实际读的一直是 @DefaultValue。
+    #    发现它纯属偶然 —— 接 RocketMQ 时设 PAY_MINUTES=1 想把支付时限压到 1 分钟，
+    #    结果单据 deadline 还是 +10 分钟，回头才查出绑定路径不对。
     # 患者令牌的 HMAC 密钥。空则每次启动随机生成（重启后旧令牌失效，演示环境无所谓）。
     #
     # **刻意不给硬编码默认值**：那会让所有部署共享同一个签名密钥，
@@ -190,27 +212,28 @@ flashpilot:
     # （预生成一批轮着用，见 scripts/gen-tokens.ps1）。
     token-secret: ${PATIENT_TOKEN_SECRET:}
 
-    reconcile:
-      # 失约扫描间隔。把「就诊日已过却仍是 BOOKED」的单转成 NO_SHOW 并累加失约次数。
-      #
-      # 这个任务是补上来的：NO_SHOW 原来是六状态机里**唯一进不去的状态** ——
-      # markNoShow 只有手工 HTTP 接口这一个调用者，而文档写着「就诊时段结束扫描」。
-      # 后果是失约计数永不增加、**失约黑名单永远是空的**，
-      # 而黑名单是整个风控里唯一会「真正拒绝」的手段（其余都只是降权进慢车道）。
-      #
-      # 默认 5 分钟：失约统计不急，正常情况下候选集是空的，
-      # 真正有活干的只是每天 0 点后的那几轮。
-      no-show-scan-ms: 300000
+    # 抢到号之后的支付时限（分钟）。原来硬编码在 ApptPersistRepository 里。
+    #
+    # 提出来的直接动机是**可测性**：所有压测都只跑 20-90 秒，而单子 10 分钟后才到期，
+    # 于是超时释放的「先改 MySQL 状态、再还 Redis 号源」这两步从来没在量级上跑过 ——
+    # 而这条路径出错的方式是**双重归还 = 超卖**。
+    # 调成 1 分钟就能在一次压测里把这条路径压出来（见 scripts/soak-expiry.ps1）。
+    #
+    # 生产上不要调小：改短它会让已经发出的单提前作废。
+    pay-minutes: ${PAY_MINUTES:10}
 
-      # 抢到号之后的支付时限（分钟）。原来硬编码在 ApptPersistRepository 里。
-      #
-      # 提出来的直接动机是**可测性**：所有压测都只跑 20-90 秒，而单子 10 分钟后才到期，
-      # 于是超时释放的「先改 MySQL 状态、再还 Redis 号源」这两步从来没在量级上跑过 ——
-      # 而这条路径出错的方式是**双重归还 = 超卖**。
-      # 调成 1 分钟就能在一次压测里把这条路径压出来（见 scripts/soak-expiry.ps1）。
-      #
-      # 生产上不要调小：改短它会让已经发出的单提前作废。
-      pay-minutes: ${PAY_MINUTES:10}
+    # 失约扫描间隔。把「就诊日已过却仍是 BOOKED」的单转成 NO_SHOW 并累加失约次数。
+    #
+    # 这个任务是补上来的：NO_SHOW 原来是六状态机里**唯一进不去的状态** ——
+    # markNoShow 只有手工 HTTP 接口这一个调用者，而文档写着「就诊时段结束扫描」。
+    # 后果是失约计数永不增加、**失约黑名单永远是空的**，
+    # 而黑名单是整个风控里唯一会「真正拒绝」的手段（其余都只是降权进慢车道）。
+    #
+    # 默认 5 分钟：失约统计不急，正常情况下候选集是空的，
+    # 真正有活干的只是每天 0 点后的那几轮。
+    no-show-scan-ms: 300000
+
+    reconcile:
 
       # 对账补偿：把校验器发现的号源残差自动补回去。
       #

@@ -32,6 +32,7 @@ public class ApptPersistRepository {
 
 
     private final ApptPersistMapper mapper;
+    private final com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeout;
     private final StringRedisTemplate redis;
     private final ScheduleRepository schedules;
     private final AppointmentRepository appts;
@@ -43,7 +44,9 @@ public class ApptPersistRepository {
 
     public ApptPersistRepository(ApptPersistMapper mapper, StringRedisTemplate redis,
                                 ScheduleRepository schedules, AppointmentRepository appts,
-                                com.flashpilot.config.FlashPilotProperties props) {
+                                com.flashpilot.config.FlashPilotProperties props,
+                                com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeout) {
+        this.payTimeout = payTimeout;
         this.mapper = mapper;
         this.redis = redis;
         this.schedules = schedules;
@@ -98,6 +101,25 @@ public class ApptPersistRepository {
         int n = appts.insertPendingBatch(batch);
         if (n == 0 && !batch.isEmpty()) {
             diagnoseAndRealign(poolId, batch);
+        }
+        // 落库成功后投递「到期来看一眼」的定时消息。
+        //
+        // **放在插入之后而不是之前**：先发消息再插入的话，消息可能在单子落库前就到期，
+        // 消费端查不到这张单、直接跳过，于是这张单再也不会被消息触发释放。
+        // 反过来先插后发，最坏是消息没发出去 —— 由定时扫描兜底，不会漏。
+        //
+        // 这和「先改 MySQL 状态、再动 Redis 号源」是同一条纪律：
+        // **两个存储之间没有事务时，让失败落在可恢复的那一侧。**
+        if (payTimeout != null && n > 0) {
+            java.util.List<String> nos = new ArrayList<>(n);
+            for (AppointmentRepository.PendingAppt p : batch) {
+                nos.add(p.apptNo());
+            }
+            // 注意这里投递的是整批（含被 INSERT IGNORE 挡掉的重复单）。
+            // 多投的那几条到期时会发现单子不是自己这次插的、状态已变，直接跳过 ——
+            // 消费端本来就是 at-least-once 语义，多几条无害，
+            // 而精确算出「哪几条真的插进去了」要额外一次回查，不值得。
+            payTimeout.scheduleAll(nos, deadline);
         }
         return n;
     }

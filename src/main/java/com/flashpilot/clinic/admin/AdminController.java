@@ -48,13 +48,19 @@ public class AdminController {
     private final ReconcileService reconcile;
     private final InstanceRegistry instances;
     private final com.flashpilot.clinic.AppointmentService appointments;
+    private final com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeoutProducer;
+    private final com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer;
 
     public AdminController(AdminMapper adminMapper, ReleaseService release, StockRedisRepository stockRedis,
                            MetricsCollector collector, HotConfigService hotConfig,
                            ConfigAuditRepository audit, RiskControlService riskControl, SlowLane slowLane,
                            ReconcileService reconcile, InstanceRegistry instances,
-                           com.flashpilot.clinic.AppointmentService appointments) {
+                           com.flashpilot.clinic.AppointmentService appointments,
+                           com.flashpilot.clinic.expiry.PayTimeoutProducer payTimeoutProducer,
+                           com.flashpilot.clinic.expiry.PayTimeoutConsumer payTimeoutConsumer) {
         this.appointments = appointments;
+        this.payTimeoutProducer = payTimeoutProducer;
+        this.payTimeoutConsumer = payTimeoutConsumer;
         this.reconcile = reconcile;
         this.instances = instances;
         this.adminMapper = adminMapper;
@@ -158,6 +164,17 @@ public class AdminController {
 
         // 预约状态分布 —— 运营最关心的一屏
         m.put("appointments", adminMapper.statusBreakdown(scheduleId));
+
+        // 超时释放的两条路径分开计数 —— 这是回答「定时消息到底有没有在干活」的唯一方式。
+        // 只看「释放了多少号」看不出是消息干的还是扫描兜底干的，
+        // 而一旦消息链路悄悄坏掉（broker 挂了、topic 被删），
+        // 扫描会默默把活全接过去，外部指标完全正常 —— 又是一个静默失败。
+        Map<String, Object> expiry = new LinkedHashMap<>();
+        expiry.put("messageSent", payTimeoutProducer.sentCount());
+        expiry.put("messageSendFailed", payTimeoutProducer.failedCount());
+        expiry.put("releasedByMessage", payTimeoutConsumer.releasedByMessageCount());
+        expiry.put("alreadySettledOnArrival", payTimeoutConsumer.alreadySettledCount());
+        m.put("payTimeout", expiry);
 
         // 数据面与控制面指标
         MetricsSnapshot snap = collector.latest();

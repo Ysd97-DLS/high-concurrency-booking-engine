@@ -74,6 +74,49 @@ services:
       timeout: 4s
       retries: 30
 
+  # ---------- RocketMQ（支付超时释放的延迟消息）----------
+  #
+  # 为什么引入它，而不是用 Redis Stream：
+  # Stream 是「扣库存 + 投递」的原子出口（XADD 写在 sell_one.lua 里，和扣租约同一条 Lua），
+  # 这个原子性不能动 —— 拆开就是双写问题（扣了库存消息没发 = 少卖；发了消息没扣 = 超卖）。
+  # 所以 RocketMQ 不替换它，而是承接 Stream 做不了的事：**任意时刻的定时消息**。
+  #
+  # 用 5.x 而不是 4.x：4.x 只有 18 个固定延迟级别（1s/5s/…/10m/20m/30m/1h/2h），
+  # 而支付时限是可配的（默认 10 分钟，压测时调到 1 分钟），固定级别刚好卡不住。
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: fp-rmq-namesrv
+    ports:
+      - "127.0.0.1:9876:9876"
+    command: sh mqnamesrv
+    environment:
+      # 单机演示把堆压到最小，默认配置会要 4G
+      JAVA_OPT_EXT: "-server -Xms256m -Xmx256m -Xmn128m"
+    healthcheck:
+      # 镜像里没有 netstat / curl / nc，所以直接读 /proc/net/tcp*。
+      # 9876 十进制 = 2694 十六进制，内核按十六进制列端口。
+      # **必须查 tcp6**：Netty 默认绑 IPv6 的 ::，只查 tcp 会永远查不到，
+      # 表现为「日志说 boot success 但容器一直 unhealthy」。
+      test: ["CMD-SHELL", "grep -q ':2694' /proc/net/tcp6 /proc/net/tcp || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.1
+    container_name: fp-rmq-broker
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:10911:10911"
+      - "127.0.0.1:10909:10909"
+    volumes:
+      - ./deploy/rocketmq/broker.conf:/home/rocketmq/conf/broker.conf:ro
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/conf/broker.conf
+    environment:
+      JAVA_OPT_EXT: "-server -Xms512m -Xmx512m -Xmn256m"
+
   prometheus:
     image: prom/prometheus:v3.1.0
     container_name: fp-prometheus

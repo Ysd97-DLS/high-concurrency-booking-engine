@@ -217,6 +217,46 @@ public class AppointmentService {
     }
 
     /**
+     * 释放单张超时未支付的预约单。由 RocketMQ 定时消息到期时调用。
+     *
+     * <h2>为什么这个方法可以被重复调用</h2>
+     *
+     * RocketMQ 保证至少一次投递，同一条消息可能到达多次。这里天然幂等，
+     * 因为 {@code markExpired} 是<b>带旧状态条件的 UPDATE</b>
+     * （{@code WHERE status='PENDING_PAY'}）—— 第一次改成 EXPIRED 之后，
+     * 后续每次的 affected rows 都是 0，直接返回 false，不会重复归还号源。
+     *
+     * <p><b>重复归还号源就是超卖</b>，所以这个幂等性不是锦上添花，是必需的。
+     * 而它不需要额外的去重表或分布式锁 —— 条件更新本身就是去重手段，
+     * 这和支付与超时释放并发时「谁的 affected rows 是 1 谁赢」是同一个机制。
+     *
+     * <h2>为什么到期了还要再判一次 payExpired</h2>
+     *
+     * 消息的投递时刻是发消息时算出来的。如果中途改过 {@code pay-minutes}
+     * （压测时就会改），或者 broker 提前投递了，到期时这张单可能还没真的过期。
+     * 判据的权威始终是 {@link Appointment#payExpired}，不是消息到没到。
+     *
+     * @return true 表示这次调用真的把它释放了；false 表示它已经不是待支付状态
+     *         （已付款 / 已退号 / 已被扫描兜底），或者还没到期
+     */
+    public boolean releaseIfStillPending(String apptNo) {
+        Appointment a = appts.findByApptNo(apptNo);
+        if (a == null || a.status() != ApptStatus.PENDING_PAY) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        if (!a.payExpired(now)) {
+            // 消息早到了。不释放，交给定时扫描 —— 它的判据和这里是同一个方法。
+            return false;
+        }
+        if (!appts.markExpired(apptNo, now)) {
+            return false;   // 被支付或被扫描抢先，正常情况
+        }
+        releaseOne(a.scheduleId(), a.patientId(), "支付超时（定时消息）apptNo=" + apptNo);
+        return true;
+    }
+
+    /**
      * 超时释放：把已过支付时限的待支付单转成 EXPIRED，并把号源还回池子。
      *
      * <p>这是「完整项目」相对「压测 demo」最关键的补齐。没有它，

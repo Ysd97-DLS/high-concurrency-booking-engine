@@ -35,6 +35,14 @@
         <!-- 持久层：MyBatis 负责领域 CRUD 与动态 SQL。
              starter 自带 spring-jdbc，所以下面仍可用 JdbcTemplate —— 迁移期间两者并存，
              迁完之后校验/对账那类一次性分析查询是否保留 JdbcTemplate，见 README 持久层一节。 -->
+        <!-- RocketMQ：只用于支付超时释放的**定时消息**。
+             它刻意不替换 Redis Stream —— 那条链路的 XADD 写在 sell_one.lua 里，
+             和扣租约是同一个原子操作，拆开就是双写问题（扣了库存消息没发 = 少卖）。 -->
+        <dependency>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-spring-boot-starter</artifactId>
+            <version>2.3.1</version>
+        </dependency>
         <dependency>
             <groupId>org.mybatis.spring.boot</groupId>
             <artifactId>mybatis-spring-boot-starter</artifactId>
@@ -58,6 +66,25 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Testcontainers：补上 README 里自认的最大测试缺口 ——
+             Lua 脚本、放号链路、护栏这些都需要真的 Redis + MySQL，
+             之前只能靠压测脚本端到端验证，而端到端失败时定位不到是哪一层。 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.redis</groupId>
+            <artifactId>testcontainers-redis</artifactId>
+            <version>2.2.4</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -67,6 +94,25 @@
 
     <build>
         <plugins>
+            <!-- 集成测试（*IT）交给 failsafe，不进 surefire。
+                 分开的理由很实际：单元测试要能在任何机器上秒级跑完，
+                 而集成测试需要 Redis + MySQL 在跑。混在一起的话，
+                 「没起 docker」和「代码写错了」会给出同一个红叉。
+
+                 mvn test    → 只跑单元测试（215 个，几秒）
+                 mvn verify  → 单元 + 集成（需要 docker compose up -d） -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
