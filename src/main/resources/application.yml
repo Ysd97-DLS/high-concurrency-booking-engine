@@ -198,12 +198,69 @@ flashpilot:
       # 默认关闭：需要填 LLM_API_KEY 才能开。见 README「开启 Agent 控制面」。
       enabled: false
       base-url: ${LLM_BASE_URL:https://api.deepseek.com}
-      model: ${LLM_MODEL:deepseek-chat}
+      # 默认模型。**这个值会随供应商更新而过时** —— 原来写的是 deepseek-chat，
+      # 而 DeepSeek 现在只提供 deepseek-v4-flash / deepseek-v4-pro，
+      # 按旧默认值启用 L1 会直接失败。这类「外部依赖的名字写死在配置里」
+      # 没有任何机制会提醒你回来改。
+      #
+      # **选 flash 而不是 pro，理由是延迟而不是成本。** 实测同一份真实 payload：
+      #   flash  14–16 秒（completion_tokens ≈ 1500）
+      #   pro    41–43 秒（completion_tokens ≈ 2400）
+      # 而 observe-window-ms 是 20 秒 —— pro 的一次决策比整个观察窗口还长，
+      # 意味着**提案回来时它诊断的那个系统状态已经不存在了**。
+      # 控制面的全部意义是闭环，而 43 秒的反馈延迟在秒级系统上等于开环。
+      #
+      # 两者的提案质量在这个任务上没有实质差别（都正确诊断出「limit_qps 高于实际处理能力、
+      # 积压在涨」并给出同方向的降速提案），所以多花 3 倍时间换不到东西。
+      # 想用 pro 就设 LLM_MODEL=deepseek-v4-pro，但记得同时放宽 observe-window-ms。
+      model: ${LLM_MODEL:deepseek-v4-flash}
       api-key: ${LLM_API_KEY:}
-      timeout-ms: 20000
+      # 单次 LLM 调用的读超时。
+      #
+      # **20000 太紧，实测会让 L1 在高压下必然失灵。** deepseek-v4-pro 在系统空闲时
+      # 单次调用要 13975ms，而压测时 CPU 满载，响应更慢 —— 直接撞上 20 秒读超时。
+      # 表现极具误导性：日志说「Error while extracting response ... application/json」，
+      # 听起来像响应格式不对，真实原因是 SocketTimeoutException。
+      #
+      # 更要紧的是失灵的时机：**L1 在系统最需要它的时候（高压）恰好调不通**，
+      # 而空闲时手工触发一切正常 —— 所以只做手工验证是发现不了的。
+      #
+      # 放宽到 60 秒。注意它和 observe-window-ms（20 秒）不是一回事：
+      # 后者是「两次决策的最小间隔」，而单次调用可以比它长。
+      # 慢调用会让窗口先过期，所以 AgentLoop 另外加了 in-flight 保护
+      # （否则两个调度线程会同时阻塞在 LLM 上，看着同一份指标提出相反的提案）。
+      # 实测 flash 是 14–16 秒，取 45 秒留 3 倍余量。
+      # 这是**整体请求超时**（JDK HttpClient 的 HttpRequest.timeout），不是读超时 ——
+      # 后者在推理模型上根本管不住：服务端「思考」期间持续吐数据，
+      # 每次读都有数据、读超时永不触发，实测撞到过单次 2 分 40 秒才返回。
+      # 45 秒不够 —— 实测空闲时决策只要 6.4 秒，而**高压下同一个模型超过 45 秒**：
+      # payload 变大（recent_changes 里塞满 AIMD 每秒的调整、current_config 全量）
+      # 加上本地 CPU 被压测占满，序列化和网络处理都慢下来。
+      #
+      # **也就是说 LLM 在系统最需要它的时候最慢**，慢 7 倍。
+      # 这一条比任何架构图都更能说明为什么 L0 必须能独立兜底：
+      # 不是「L1 挂了才用 L0」，而是高压时 L1 基本上一定来不及。
+      #
+      # 取 120 秒是为了让高压决策能跑完（好拿到归因文本），
+      # 代价是那个提案回来时可能已经过期 —— 所以 STALE_DECISION_MS 那道检查是必须的。
+      timeout-ms: 120000
       # 事件驱动：只有指标越界才唤醒 Agent，不做定时轮询。
       trigger-p99-ms: 50
       trigger-reject-rate: 0.2
       trigger-stream-pending: 2000
-      # 一次决策后必须等满观察窗口才允许下一次
-      observe-window-ms: 20000
+      # 单次回复的 token 上限。推理模型在 tool_choice=auto 下先输出思考、再调工具，
+      # prompt 越大思考越长。实测 4000 不够：一次真实决策把 4000 全用在思考上，
+      # tool_calls 和 content 都是空，而日志显示成「模型未给出结构化决策」——
+      # 那句话听起来像模型不配合，真相是被我们自己掐断了。
+      max-tokens: 8000
+
+      # 一次决策后必须等满观察窗口才允许下一次。
+      #
+      # **从 20 秒放大到 60 秒，因为实测的决策延迟就是 35 秒左右**（flash + 真实 payload：
+      # systemPrompt 含全部参数边界、payload 含全量配置和最近变更）。
+      # 窗口比单次调用还短是没有意义的 —— 那意味着「上一次的效果还没看到就允许下一次」。
+      #
+      # 这个数字背后是一个架构事实，值得写下来：
+      # **LLM 的延迟决定了它在控制面里只能做分钟级的归因，做不了秒级的执行器。**
+      # 所以 L0 必须能独立兜底，而不是把它当成 L1 的降级方案 —— 它是主力。
+      observe-window-ms: 60000

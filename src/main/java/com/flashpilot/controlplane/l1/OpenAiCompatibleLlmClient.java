@@ -47,8 +47,23 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.cfg = props.control().agent();
         this.json = json;
 
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(5));
+        // 用 JDK HttpClient 而不是 SimpleClientHttpRequestFactory，
+        // 因为后者的 setReadTimeout 是**读超时**（两次收到数据之间的最大间隔），
+        // 而不是整体超时。
+        //
+        // 这个区别在这里是致命的：deepseek-v4-pro 是推理模型，服务端在「思考」期间
+        // 会持续吐数据（分块/心跳），于是**每次读都有数据、读超时永不触发**。
+        // 实测撞到过一次单次调用耗时 **超过 2 分 40 秒**才返回 ——
+        // 而配置写的是 60 秒，看起来完全没生效。
+        //
+        // JdkClientHttpRequestFactory 把 setReadTimeout 映射到 HttpRequest.timeout()，
+        // 那是**整体请求超时**：从发出到响应完成的总时长上限，无论中间有没有数据流动。
+        // 这才是控制面需要的语义 —— 一次决策必须有硬性时间上限。
+        org.springframework.http.client.JdkClientHttpRequestFactory factory =
+                new org.springframework.http.client.JdkClientHttpRequestFactory(
+                        java.net.http.HttpClient.newBuilder()
+                                .connectTimeout(Duration.ofSeconds(5))
+                                .build());
         factory.setReadTimeout(Duration.ofMillis(cfg.timeoutMs()));
 
         this.http = RestClient.builder()
@@ -82,7 +97,17 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                     Map.of("role", "system", "content", systemPrompt),
                     Map.of("role", "user", "content", userPayload)));
             body.put("tools", toolSpecs());
+            // 只能用 auto：DeepSeek 不支持 tool_choice="required"（实测 HTTP 400）。
+            // 代价是模型会先输出一段推理再调工具，而那段推理就是延迟的主要来源
+            // （实测 completion_tokens 1500–2500）。
             body.put("tool_choice", "auto");
+            // **必须设上限。** 不设的话推理可以无限长 —— 实测撞到过一次单次调用
+            // 超过 2 分 40 秒才返回，而控制面的观察窗口只有 20 秒。
+            // 取 4000：实测 flash 用 ~1500、pro 用 ~2400 就能走到 tool call，
+            // 留出余量但不给「无限想下去」的空间。
+            // 注意不能设太小：auto 模式下推理在 tool call 之前，
+            // 截断在推理阶段就完全拿不到结构化决策了。
+            body.put("max_tokens", cfg.maxTokens());
 
             String raw = http.post()
                     .uri("/v1/chat/completions")
@@ -93,9 +118,35 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             return parse(raw);
         } catch (Exception e) {
             // 调不通就什么都不做，L0 继续兜底。这是设计好的降级，不该让它影响数据面。
-            log.warn("[L1] LLM 调用失败，本轮跳过（L0 规则层继续兜底）：{}", e.toString());
+            //
+            // 但**要说清是什么失败**。原来这里只打 e.toString()，而 Spring 会把读超时
+            // 包装成 `RestClientException: Error while extracting response for type
+            // [java.lang.String] and content type [application/json]` ——
+            // 那句话听起来像「响应格式不对」，而真实原因是 SocketTimeoutException。
+            // 实测排查这一个失败花了好几步（对比手工触发成功、看耗时、翻超时配置），
+            // 而根因链本来一行就能说明白。
+            log.warn("[L1] LLM 调用失败，本轮跳过（L0 规则层继续兜底）：{} ← 根因 {}",
+                    e.toString(), rootCauseOf(e));
             return Optional.empty();
         }
+    }
+
+    private static String snippet(String s, int max) {
+        if (s == null || s.isBlank()) {
+            return "(空)";
+        }
+        String one = s.replaceAll("\\s+", " ").trim();
+        return one.length() <= max ? one : one.substring(0, max) + "…";
+    }
+
+    /** 异常链的最里层，带类名 —— 超时和格式错在最外层看起来是同一个异常。 */
+    private static String rootCauseOf(Throwable e) {
+        Throwable root = e;
+        int guard = 0;
+        while (root.getCause() != null && root.getCause() != root && guard++ < 20) {
+            root = root.getCause();
+        }
+        return root.getClass().getSimpleName() + ": " + root.getMessage();
     }
 
     private Optional<AgentDecision> parse(String raw) throws Exception {
@@ -103,15 +154,37 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             return Optional.empty();
         }
         JsonNode root = json.readTree(raw);
-        JsonNode message = root.path("choices").path(0).path("message");
+        JsonNode choice = root.path("choices").path(0);
+        JsonNode message = choice.path("message");
         JsonNode toolCalls = message.path("tool_calls");
+        String finish = choice.path("finish_reason").asText("");
 
         if (!toolCalls.isArray() || toolCalls.isEmpty()) {
-            // 模型没走 tool call，只回了文本。不去正则抠数字——那样早晚出事。
+            // 模型没走 tool call。不去正则抠数字——那样早晚出事。
             String text = message.path("content").asText("");
-            log.info("[L1] 模型未走 tool call，本轮视为不调整。原文：{}",
-                    text.length() > 200 ? text.substring(0, 200) + "…" : text);
-            return Optional.of(AgentDecision.noChange(text.isBlank() ? "模型未给出结构化决策" : text));
+            // DeepSeek 这类推理模型把思考过程放在 reasoning_content，而不是 content。
+            // 少读这个字段的后果实测过：content 和 tool_calls 都是空，
+            // 于是归因显示成兜底文案「模型未给出结构化决策」——
+            // 那句话听起来像模型不配合，真相是**我们的 max_tokens 把它掐断在思考阶段**。
+            String reasoning = message.path("reasoning_content").asText("");
+            int ctok = root.path("usage").path("completion_tokens").asInt(-1);
+
+            if ("length".equals(finish)) {
+                // 被截断。这是配置问题，不是模型问题，必须说清楚 ——
+                // 否则下一个看日志的人会以为「这模型不支持 tool call」，方向就跑偏了。
+                log.warn("""
+                        [L1] 模型输出被 max_tokens 截断（finish_reason=length，completion_tokens={}），                        没来得及调用工具。推理模型会先输出思考再调工具，                        prompt 越大思考越长 —— 要么加大 max_tokens，要么精简 prompt。                        思考片段：{}""",
+                        ctok, snippet(reasoning.isBlank() ? text : reasoning, 300));
+                return Optional.of(AgentDecision.noChange(
+                        "本轮无提案：模型输出被 max_tokens 截断（用了 " + ctok + " tokens 仍未给出结构化决策）"));
+            }
+
+            log.info("[L1] 模型未走 tool call（finish_reason={}, completion_tokens={}），本轮视为不调整。原文：{}",
+                    finish, ctok, snippet(text.isBlank() ? reasoning : text, 300));
+            String why = !text.isBlank() ? text
+                    : !reasoning.isBlank() ? "模型只输出了思考没给结论：" + snippet(reasoning, 200)
+                    : "模型返回空内容（finish_reason=" + finish + "）";
+            return Optional.of(AgentDecision.noChange(why));
         }
 
         JsonNode call = toolCalls.get(0).path("function");

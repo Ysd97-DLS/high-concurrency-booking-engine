@@ -50,6 +50,15 @@ public class AgentLoop {
     /** 没有流量就不值得叫醒模型。 */
     private static final double MIN_QPS_TO_ACT = 50.0;
 
+    /**
+     * 决策耗时超过这个值就要重新确认触发条件还成立。
+     *
+     * <p>取 15 秒的依据：L0 每秒调一次，15 秒足够它把一次超调纠回来；
+     * 而 LLM 正常耗时是 7–14 秒（实测 deepseek-v4-pro 空闲时），
+     * 也就是说<b>正常情况下这道检查不会触发</b>，只有真的慢到异常才会拦。
+     */
+    private static final long STALE_DECISION_MS = 15_000;
+
     private static final int TIMELINE_CAPACITY = 50;
 
     private final LlmClient llm;
@@ -62,6 +71,36 @@ public class AgentLoop {
     private final ObjectMapper json;
 
     private final AtomicLong lastDecisionAt = new AtomicLong(0);
+
+    /**
+     * 是否有一次 LLM 调用正在飞。
+     *
+     * <p><b>这个保护原来不存在，而观察窗口挡不住它。</b>{@code lastDecisionAt} 是在调用
+     * <i>开始</i>时设置的，窗口 20 秒；而 deepseek-v4-pro 实测单次要 14 秒、
+     * 高压下更慢（超时上限现在是 60 秒）。于是很容易出现：
+     * 第 20 秒窗口过期，而第一次调用还在飞，第 22 秒的 tick 就又发起一次 ——
+     * <b>两个调度线程同时阻塞在 LLM 上，而它们看到的是同一份指标</b>，
+     * 可能对同一个参数提出两个方向相反的提案。
+     *
+     * <p>护栏能挡住第二个提案（冷却期），但那是最后一道防线在替上游的并发问题擦屁股。
+     * 而且两个调度线程一起阻塞 60 秒，对一个 18 线程的共享池是实打实的占用。
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean inFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 上一次检查为什么没有决策。
+     *
+     * <p>加这个是因为排查「L1 怎么一直不动」花了太多步：指标看着都超阈值、手工触发又正常，
+     * 而自动路径有 5 个门（LLM 可用性、最小 QPS、唤醒判据、观察窗口、in-flight），
+     * <b>每一个都是静默 return</b>，从外面完全看不出卡在哪一道。
+     *
+     * <p>这和这个项目反复出现的那类问题同源：一个东西「没在工作」，
+     * 而它不工作的原因不可观测。运维问「Agent 为什么不调参」时，
+     * 这一行就是答案，不用去读源码数 if。
+     */
+    private final java.util.concurrent.atomic.AtomicReference<String> lastSkip =
+            new java.util.concurrent.atomic.AtomicReference<>("还没检查过");
     private final ConcurrentLinkedDeque<Map<String, Object>> timeline = new ConcurrentLinkedDeque<>();
 
     public AgentLoop(LlmClient llm, MetricsCollector collector, GuardRail guard, HotConfigService hotConfig,
@@ -80,21 +119,39 @@ public class AgentLoop {
     @Scheduled(fixedDelayString = "2000")
     public void maybeDecide() {
         if (!llm.available()) {
+            lastSkip.set("Agent 未启用或没配 API key");
             return;
         }
         MetricsSnapshot s = collector.latest();
         if (s.requestQps() < MIN_QPS_TO_ACT) {
+            lastSkip.set(String.format("流量太低不值得动（requestQps=%.0f < %.0f）",
+                    s.requestQps(), MIN_QPS_TO_ACT));
             return;
         }
         String trigger = triggerOf(s);
         if (trigger == null) {
+            lastSkip.set(String.format("指标都在阈值内（P99=%.1fms 误拒=%.1f%% 积压=%d）",
+                    s.p99Ms(), s.rejectRate() * 100, s.streamPending()));
             return;
         }
         long window = props.control().agent().observeWindowMs();
-        if (System.currentTimeMillis() - lastDecisionAt.get() < window) {
+        long since = System.currentTimeMillis() - lastDecisionAt.get();
+        if (since < window) {
+            lastSkip.set(String.format("上次决策才过了 %dms，观察窗口 %dms 还没满（触发条件已满足：%s）",
+                    since, window, trigger));
             return;
         }
-        decideNow(s, trigger, false);
+        // 上一次调用还在飞就不要再发 —— 观察窗口挡不住这种情况，见 inFlight 的注释。
+        if (!inFlight.compareAndSet(false, true)) {
+            lastSkip.set("上一次 LLM 调用还在进行中（触发条件已满足：" + trigger + "）");
+            return;
+        }
+        try {
+            lastSkip.set("正在决策：" + trigger);
+            decideNow(s, trigger, false);
+        } finally {
+            inFlight.set(false);
+        }
     }
 
     /** 手工触发一次决策，给 demo 和调试用。{@code dryRun=true} 时只看提案不执行。 */
@@ -114,6 +171,7 @@ public class AgentLoop {
         String payload = buildPayload(s, trigger);
         Optional<AgentDecision> maybe = llm.decide(systemPrompt(), payload);
 
+
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("at", startedAt);
         event.put("trigger", trigger);
@@ -122,9 +180,50 @@ public class AgentLoop {
         event.put("p99Ms", Math.round(s.p99Ms() * 100) / 100.0);
         event.put("limitQpsBefore", s.limitQps());
 
+        // ---------- 决策回来之后，先确认世界还是那个世界 ----------
+        //
+        // 这一段是实测逼出来的：LLM 调用<b>可能耗时几分钟</b>（推理模型 + 服务端负载，
+        // 实测撞到过 2 分 40 秒）。而 @Scheduled 的 fixedDelay 语义是「上一次执行完成后
+        // 再等 N 秒」，所以调用阻塞期间整个 L1 是停摆的 —— 这一点还好，L0 在兜底。
+        //
+        // <b>真正危险的是：提案基于的是几分钟前的那份快照。</b>
+        // 那时候「P99=159ms、误拒率 54%」，而三分钟后压测早结束了、系统空转，
+        // 这时候去执行一个「把限流砍到 3000」的提案，是拿过期诊断开一副现在的药。
+        // 控制面的全部意义是闭环，而闭环里最不能有的就是这种延迟。
+        //
+        // 所以：决策返回后重新取一份快照，如果原来的触发条件已经不成立，就放弃执行。
+        // 放弃不是失败 —— 它恰恰说明系统自己恢复了，本来就不需要这次调整。
+        long staleMs = System.currentTimeMillis() - startedAt;
+        if (!dryRun && staleMs > STALE_DECISION_MS) {
+            MetricsSnapshot now = collector.latest();
+            String stillTriggered = triggerOf(now);
+            if (stillTriggered == null) {
+                event.put("outcome", "STALE_DROPPED");
+                event.put("latencyMs", staleMs);
+                event.put("note", String.format(
+                        "决策耗时 %dms，回来时触发条件已消失（现在 P99=%.1fms 误拒=%.1f%% 积压=%d），"
+                        + "放弃执行 —— 提案基于的是 %d 秒前的快照，那是过期诊断",
+                        staleMs, now.p99Ms(), now.rejectRate() * 100, now.streamPending(), staleMs / 1000));
+                maybe.ifPresent(d -> event.put("droppedProposal",
+                        d.noChange() ? "(no-change)" : d.param() + " → " + d.value()));
+                push(event);
+                log.warn("[L1] 决策耗时 {}ms，回来时系统已恢复，放弃执行提案（避免用过期诊断调参）", staleMs);
+                return event;
+            }
+        }
+
         if (maybe.isEmpty()) {
+            // **失败也要记耗时。** 原来这里不写 latencyMs，于是它留在初始值 0，
+            // 而时间线上「LLM_UNAVAILABLE + 延迟 0ms」看起来像「根本没发出请求」——
+            // 真实情况是请求发了、等了满 20 秒读超时。
+            // 耗时正好是判断「是不是超时」最直接的证据，少了它就得去翻源码。
+            long elapsed = System.currentTimeMillis() - startedAt;
+            long timeout = props.control().agent().timeoutMs();
+            event.put("latencyMs", elapsed);
             event.put("outcome", "LLM_UNAVAILABLE");
-            event.put("note", "调用失败，本轮由 L0 兜底");
+            event.put("note", elapsed >= timeout - 500
+                    ? "调用超时（耗时 " + elapsed + "ms ≈ 上限 " + timeout + "ms），本轮由 L0 兜底"
+                    : "调用失败（耗时 " + elapsed + "ms），本轮由 L0 兜底");
             push(event);
             return event;
         }
@@ -280,9 +379,15 @@ public class AgentLoop {
         return Collections.unmodifiableList(new ArrayList<>(timeline));
     }
 
+    /** 上一次自动检查为什么没有决策。给「Agent 怎么一直不动」这个问题一个直接答案。 */
+    public String lastSkipReason() {
+        return lastSkip.get();
+    }
+
     public void reset() {
         lastDecisionAt.set(0);
         timeline.clear();
+        lastSkip.set("实验重置，还没检查过");
     }
 
     public boolean enabled() {

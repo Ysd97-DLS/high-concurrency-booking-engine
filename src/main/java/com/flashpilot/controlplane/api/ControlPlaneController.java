@@ -96,6 +96,10 @@ public class ControlPlaneController {
         m.put("hint", agentLoop.enabled()
                 ? "Agent 已启用。指标越界时会自动唤醒，也可以 POST /control/agent/tick 手工触发。"
                 : "Agent 未启用（缺 LLM_API_KEY 或 flashpilot.control.agent.enabled=false），系统当前只跑 L0 规则控制。");
+        // 「上一次自动检查为什么没决策」。自动路径有 5 个静默 return（LLM 可用性、
+        // 最小 QPS、唤醒判据、观察窗口、in-flight），从外面看不出卡在哪一道 ——
+        // 而「Agent 怎么一直不动」正是运维会问的第一个问题。
+        m.put("lastSkip", agentLoop.lastSkipReason());
         m.put("timeline", agentLoop.timeline());
         return m;
     }

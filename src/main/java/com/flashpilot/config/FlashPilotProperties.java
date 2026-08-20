@@ -170,7 +170,17 @@ public record FlashPilotProperties(
                 @DefaultValue("50") double triggerP99Ms,
                 @DefaultValue("0.2") double triggerRejectRate,
                 @DefaultValue("2000") long triggerStreamPending,
-                @DefaultValue("20000") long observeWindowMs
+                @DefaultValue("20000") long observeWindowMs,
+            /**
+             * 单次回复的 token 上限。
+             *
+             * <p>必须给，但也不能给小。推理模型在 {@code tool_choice=auto} 下会
+             * <b>先输出一段思考、再调用工具</b>，而 prompt 越大思考越长。
+             * 实测：4000 不够 —— 一次真实决策把 4000 全用在思考上，
+             * content 和 tool_calls 都是空，日志显示成「模型未给出结构化决策」，
+             * 而真相是被我们自己掐断了。
+             */
+            @DefaultValue("8000") int maxTokens
         ) {
         }
     }
