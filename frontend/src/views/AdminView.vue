@@ -13,6 +13,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi, controlApi } from '@/api/client'
+// KPI 的装配与「什么算异常」的阈值判定都在 domain/kpi.js，配了 35 个测试。
+// 留在组件里的时候它测不到，而它判错的表现是**看板把异常显示成正常**。
+import { buildKpis, fmt } from '@/domain/kpi'
 import { Refresh } from '@element-plus/icons-vue'
 
 const dash = ref(null)
@@ -48,28 +51,6 @@ const CFG_DESC = {
 const STATUS_LABEL = {
   PENDING_PAY: '待支付', BOOKED: '已预约', EXPIRED: '已失效',
   REFUNDED: '已退号', COMPLETED: '已就诊', NO_SHOW: '已失约'
-}
-
-const fmt = (n) => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('zh-CN')
-
-/** KPI 的语义判定集中在这里：什么算异常是业务判断，不该散在模板里 */
-function kpis(d) {
-  if (!d) return []
-  const p = d.performance || {}, r = d.risk || {}, rel = d.release || {}
-  const pending = (d.appointments || []).find((a) => a.status === 'PENDING_PAY')
-  const rate = p.rejectRate || 0
-  const lag = p.streamPending || 0
-  const skew = p.bucketSkew || 0
-  return [
-    { k: '号池余量', v: fmt(d.pool?.globalRemaining), s: `排班 ${d.pool?.scheduleId} · 桶 ${fmt(d.pool?.bucketSum)} + 实例持有 ${fmt(d.pool?.leaseHeld)}`, t: '' },
-    { k: '放号进度', v: (rel.progressPercent ?? 0).toFixed(0) + '%', s: rel.releasing ? '正在分批放出' : '已放完', t: rel.releasing ? 'warn' : '' },
-    { k: '有效 QPS', v: fmt(Math.round(p.effectiveQps || 0)), s: `请求 QPS ${fmt(Math.round(p.requestQps || 0))}`, t: '' },
-    { k: '误拒率', v: (rate * 100).toFixed(1) + '%', s: `窗口 P99 ${(p.p99WindowMs || 0).toFixed(1)} ms`, t: rate > 0.5 ? 'bad' : (rate > 0.2 ? 'warn' : 'ok') },
-    { k: '消费积压', v: fmt(lag), s: '待落库的成交事件', t: lag > 20000 ? 'bad' : (lag > 5000 ? 'warn' : 'ok') },
-    { k: '待支付', v: fmt(pending?.count ?? 0), s: '10 分钟后自动释放', t: '' },
-    { k: '风控降权', v: fmt(r.demoted), s: `拉黑 ${fmt(r.blocked)} · 黑名单 ${fmt(r.blocklistSize)} 人`, t: (r.demoted || 0) > 0 ? 'warn' : 'ok' },
-    { k: '桶倾斜度', v: skew.toFixed(3), s: `号段命中 ${((p.segmentHitRatio ?? 0) * 100).toFixed(1)}%`, t: skew > 1 ? 'warn' : 'ok' }
-  ]
 }
 
 async function refresh() {
@@ -263,7 +244,7 @@ onUnmounted(() => clearInterval(timer))
 
     <!-- 概览：先给结论 -->
     <div class="kpis">
-      <div v-for="c in kpis(dash)" :key="c.k" class="kpi" :class="c.t">
+      <div v-for="c in buildKpis(dash)" :key="c.k" class="kpi" :class="c.t">
         <div class="k">{{ c.k }}</div>
         <div class="v tabular">{{ c.v }}</div>
         <div class="s">{{ c.s }}</div>

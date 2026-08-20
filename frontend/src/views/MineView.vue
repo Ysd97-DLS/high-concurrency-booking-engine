@@ -2,6 +2,7 @@
 import { ref, inject, onMounted, watch, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { clinicApi } from '@/api/client'
+import { statusMeta } from '@/domain/apptStatus'
 import { useServerClock } from '@/composables/useServerClock'
 import { useCountdown } from '@/composables/useCountdown'
 import { TITLE_TEXT, TITLE_TYPE, SLOT_TEXT, PERIOD_TEXT, label } from '@/constants/clinic'
@@ -22,17 +23,10 @@ const cd = useCountdown(clock.now)
  * 把这张表集中定义，而不是在模板里写一串 v-if —— 状态机的规则应该
  * 看得见、改得动，散在模板里就没人知道完整规则是什么了。
  */
-const STATUS_META = {
-  PENDING_PAY: { label: '待支付', type: 'warning', action: 'pay',    note: '' },
-  BOOKED:      { label: '已预约', type: 'success', action: 'refund', note: '' },
-  EXPIRED:     { label: '已失效', type: 'info',    action: null,     note: '超时未支付，号源已释放回号池' },
-  REFUNDED:    { label: '已退号', type: 'info',    action: null,     note: '号源已归还' },
-  COMPLETED:   { label: '已就诊', type: 'primary', action: null,     note: '' },
-  // 失约的后果必须让用户看见，否则黑名单对用户来说是个黑箱
-  NO_SHOW:     { label: '已失约', type: 'danger',  action: null,     note: '累计 3 次失约将限制预约 30 天' }
-}
-
-const meta = (s) => STATUS_META[s] || { label: s, type: 'info', action: null, note: '' }
+// 六状态到界面的映射在 domain/apptStatus.js，配了 19 个测试。
+// 要钉住的是 action 字段：它决定页面上出现什么按钮，
+// 判错的后果是给用户一个点了必然报错的按钮。
+const meta = statusMeta
 
 async function load() {
   loading.value = true
