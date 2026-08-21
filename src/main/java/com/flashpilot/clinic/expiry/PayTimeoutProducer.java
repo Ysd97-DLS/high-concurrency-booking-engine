@@ -74,7 +74,11 @@ public class PayTimeoutProducer {
         if (rocketmq == null || apptNos.isEmpty()) {
             return;
         }
-        long deliverAt = deadline.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        // 留 1 秒余量：payExpired 的边界刻意取「恰好等于时限不算过期」（判早了是超卖入口），
+        // 而 RocketMQ 的 timer 按秒对齐投递 —— 精确在 deadline 那一秒到达的消息会被
+        // 判「未到期」、ACK 后永不重投，这张单就静默落回兜底扫描了。
+        // 晚 1 秒释放没有业务代价，消息白跑一趟才有。
+        long deliverAt = deadline.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli() + 1000;
         for (String apptNo : apptNos) {
             schedule(apptNo, deliverAt);
         }

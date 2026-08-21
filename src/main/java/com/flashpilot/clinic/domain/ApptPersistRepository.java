@@ -83,7 +83,13 @@ public class ApptPersistRepository {
         Long end = redis.opsForValue().increment(seqKey(poolId), events.size());
         long startSeq = (end == null ? events.size() : end) - events.size() + 1;
 
-        LocalDateTime deadline = LocalDateTime.now().plusMinutes(props.clinic().payMinutes());
+        // 截断到整秒，否则毫秒 ≥500 的 deadline 被 MySQL 的 DATETIME(0) **四舍五入进位**：
+        // 库里的时限比定时消息的投递时刻晚最多半秒，消息到达时 payExpired 判「未到期」、
+        // 被 ACK 后永不重投 —— 约一半的定时消息就这么静默落回兜底扫描，
+        // 而且被计进「已付款/已退号」，计数器掩盖而不是暴露它。
+        LocalDateTime deadline = LocalDateTime.now()
+                .plusMinutes(props.clinic().payMinutes())
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         List<AppointmentRepository.PendingAppt> batch = new ArrayList<>(events.size());
         for (int i = 0; i < events.size(); i++) {
             OrderEvent e = events.get(i);
@@ -110,16 +116,24 @@ public class ApptPersistRepository {
         if (n == 0 && !batch.isEmpty()) {
             diagnoseAndRealign(poolId, batch);
         }
-        // 落库成功后投递「到期来看一眼」的定时消息。
+        // 落库成功后投递「到期来看一眼」的定时消息 —— 但要等**事务提交之后**。
         //
-        // **放在插入之后而不是之前**：先发消息再插入的话，消息可能在单子落库前就到期，
-        // 消费端查不到这张单、直接跳过，于是这张单再也不会被消息触发释放。
-        // 反过来先插后发，最坏是消息没发出去 —— 由定时扫描兜底，不会漏。
+        // 这个方法整个跑在 OrderPersistService 的 @Transactional 里，直接在这儿发有两个问题：
+        //
+        // ① 最多 256 次同步 send 发生在 DB 事务内部。正常时把事务拉长几百毫秒；
+        //    broker 挂时（send timeout 3 秒、重试 0）单事务最长能被拖到十几分钟，
+        //    插入的行锁和连接全程被占，而 claim-idle 60 秒就会把同批 Stream 消息
+        //    抢给别的 flusher 重复处理。
+        // ② 外层事务还可能**回滚**（超卖拦截是常规路径）—— 回滚了的单不该有定时消息；
+        //    反方向，消息也不该在行可见之前就存在。
+        //
+        // afterCommit 一次解决两个：只有真提交了才发，发失败由定时扫描兜底。
+        // 没有事务在跑时（理论上不会，防御性保留）就地直发。
         //
         // 这和「先改 MySQL 状态、再动 Redis 号源」是同一条纪律：
         // **两个存储之间没有事务时，让失败落在可恢复的那一侧。**
         if (payTimeout != null && n > 0) {
-            java.util.List<String> nos = new ArrayList<>(n);
+            java.util.List<String> nos = new ArrayList<>(batch.size());
             for (AppointmentRepository.PendingAppt p : batch) {
                 nos.add(p.apptNo());
             }
@@ -127,7 +141,20 @@ public class ApptPersistRepository {
             // 多投的那几条到期时会发现单子不是自己这次插的、状态已变，直接跳过 ——
             // 消费端本来就是 at-least-once 语义，多几条无害，
             // 而精确算出「哪几条真的插进去了」要额外一次回查，不值得。
-            payTimeout.scheduleAll(nos, deadline);
+            final LocalDateTime d = deadline;
+            if (org.springframework.transaction.support.TransactionSynchronizationManager
+                    .isSynchronizationActive()) {
+                org.springframework.transaction.support.TransactionSynchronizationManager
+                        .registerSynchronization(
+                                new org.springframework.transaction.support.TransactionSynchronization() {
+                                    @Override
+                                    public void afterCommit() {
+                                        payTimeout.scheduleAll(nos, d);
+                                    }
+                                });
+            } else {
+                payTimeout.scheduleAll(nos, d);
+            }
         }
         return n;
     }
