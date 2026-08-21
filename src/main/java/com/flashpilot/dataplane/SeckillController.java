@@ -73,6 +73,11 @@ public class SeckillController {
     public ResponseEntity<Map<String, Object>> seckill(@PathVariable long poolId,
                                                        @RequestParam(required = false) String deviceId,
                                                        HttpServletRequest request) {
+        // holderId 来自服务端签发的令牌，不可伪造；deviceId 仍是**客户端自报**的。
+        // 这是一条要诚实承认的信任边界：设备维度的风控判据（一机多号）以它为计数键，
+        // 攻击者每次换一个随机 deviceId 就能让设备频次恒为 1 —— 对 holderId 成立的
+        // 那套批评原样适用于它。根治要把设备指纹绑进 identify 签发的令牌，
+        // 动协议和所有压测端；在那之前，设备判据只对诚实客户端有效（见 README 已知缺陷）。
         long holderId = patients.require(request);
         SeckillOutcome outcome = seckillService.seckill(poolId, holderId, deviceId);
         Map<String, Object> body = new LinkedHashMap<>();

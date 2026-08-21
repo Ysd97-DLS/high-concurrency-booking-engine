@@ -46,7 +46,13 @@ public class IdentityController {
 
     private final PatientIdentity identity;
 
-    /** IP → 当前窗口内的签发次数。滑动窗口在这里是过度设计，固定窗口够用。 */
+    /**
+     * IP → 当前窗口内的签发次数。滑动窗口在这里是过度设计，固定窗口够用。
+     *
+     * <p><b>进程内计数，多实例下上限被放大 N 倍。</b>这道限流是挡「批量换身份绕过风控」
+     * 的闸，要在多实例部署里认真依赖它就得把计数移到 Redis —— 演示环境先知道这回事
+     * （README 已知缺陷里有这一条）。
+     */
     private final Map<String, AtomicInteger> counters = new ConcurrentHashMap<>();
     private volatile long windowStartedAt = System.currentTimeMillis();
 

@@ -1,7 +1,6 @@
 package com.flashpilot.clinic.admin;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -68,14 +67,16 @@ public class ReleaseService {
      */
     public Map<String, Object> open(long scheduleId) {
         Map<String, Object> r = new LinkedHashMap<>();
-        List<Map<String, Object>> rows = java.util.List.of(adminMapper.scheduleReleaseState(scheduleId));
-        if (rows.isEmpty()) {
+        // MyBatis 单对象查询查不到行时返回 null（不是 JdbcTemplate 的空 List）——
+        // 用 List.of(null) 包装会直接 NPE，让这个「排班不存在」分支变成死代码。
+        Map<String, Object> row = adminMapper.scheduleReleaseState(scheduleId);
+        if (row == null) {
             r.put("ok", false);
             r.put("message", "排班不存在：" + scheduleId);
             return r;
         }
-        int total = ((Number) rows.get(0).get("total_slots")).intValue();
-        int released = ((Number) rows.get(0).get("released_slots")).intValue();
+        int total = ((Number) row.get("total_slots")).intValue();
+        int released = ((Number) row.get("released_slots")).intValue();
         if (released >= total) {
             r.put("ok", false);
             r.put("message", "该排班的号已全部放出（" + released + "/" + total + "），如需重放请先重置");
@@ -120,13 +121,15 @@ public class ReleaseService {
         }
         for (Plan p : active.values()) {
             try {
-                List<Map<String, Object>> rows = java.util.List.of(adminMapper.scheduleReleaseState(p.scheduleId()));
-                if (rows.isEmpty()) {
+                Map<String, Object> row = adminMapper.scheduleReleaseState(p.scheduleId());
+                if (row == null) {
+                    // 排班行被删了：干净收尾，否则 NPE 被下面的 catch 吞掉、
+                    // 计划永不移除，每个周期都空转一次并把看板计数撑高。
                     active.remove(p.scheduleId());
                     continue;
                 }
-                int total = ((Number) rows.get(0).get("total_slots")).intValue();
-                int released = ((Number) rows.get(0).get("released_slots")).intValue();
+                int total = ((Number) row.get("total_slots")).intValue();
+                int released = ((Number) row.get("released_slots")).intValue();
                 int remaining = total - released;
                 if (remaining <= 0) {
                     active.remove(p.scheduleId());
@@ -221,13 +224,12 @@ public class ReleaseService {
     }
 
     public Map<String, Object> progress(long scheduleId) {
-        List<Map<String, Object>> rows = java.util.List.of(adminMapper.scheduleProgress(scheduleId));
+        Map<String, Object> row = adminMapper.scheduleProgress(scheduleId);
         Map<String, Object> r = new LinkedHashMap<>();
-        if (rows.isEmpty()) {
+        if (row == null) {
             r.put("found", false);
             return r;
         }
-        Map<String, Object> row = rows.get(0);
         int total = ((Number) row.get("total_slots")).intValue();
         int released = ((Number) row.get("released_slots")).intValue();
         r.put("found", true);

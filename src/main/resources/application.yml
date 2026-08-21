@@ -76,10 +76,15 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        # 只开真有人用的两个：health 给脚本和 compose 探活（只读顶层 status），
+        # prometheus 给容器里的 Prometheus 抓。/actuator 不在 AdminGuard 的守护范围内，
+        # 多开一个端点就是多一段无认证可达的公开面 —— info/metrics 没有消费者，不开。
+        include: health,prometheus
   endpoint:
     health:
-      show-details: always
+      # never 而不是 always：组件详情会把 Redis/MySQL 的内部状态（地址、磁盘水位）
+      # 报给任何能访问 8090 的人。探活只需要顶层 status，脚本实测只读这个字段。
+      show-details: never
   metrics:
     tags:
       application: flashpilot
@@ -92,15 +97,22 @@ logging:
 
 # ---------- RocketMQ ----------
 #
-# 只用于支付超时释放的**定时消息**，刻意不替换 Redis Stream ——
-# 抢号那条链路的 XADD 写在 sell_one.lua 里、和扣租约是同一个原子操作，
-# 拆开就是双写问题（扣了库存消息没发 = 少卖；发了消息没扣 = 超卖）。
+# 三条链路：支付超时=定时消息、状态变更=顺序消息、预约创建=事务消息。
+# 刻意不替换 Redis Stream —— 抢号那条链路的 XADD 写在 sell_one.lua 里、
+# 和扣租约是同一个原子操作，拆开就是双写问题
+# （扣了库存消息没发 = 少卖；发了消息没扣 = 超卖）。
 #
-# name-server 为空时整个 RocketMQ 自动装配不生效，超时释放退化成纯定时扫描 ——
-# 也就是说**不起 RocketMQ 也能跑**，只是释放不那么及时。
+# **不起 RocketMQ 也能跑**：broker 连不上时生产者侧全部降级
+# （超时释放退回纯定时扫描、领域事件不发），抢号主链路不受影响。
+#
+# ⚠ 但「彻底关掉 MQ」**不能**用把 name-server 置空的办法 —— 实测置空串会让
+# @RocketMQMessageListener 的消费者容器在启动校验时直接失败、应用起不来
+# （见 IntegrationBase 里的记录）。要关就关整个自动装配：
+#   spring.autoconfigure.exclude=org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
 rocketmq:
   name-server: ${ROCKETMQ_NAMESRV:127.0.0.1:9876}
   producer:
+    # 四条链路共用这个 producer group（单应用够用）；名字带 pay-timeout 是历史原因。
     group: fp-pay-timeout-producer
     # 投递失败不重试：这条链路有定时扫描兜底，重试只会拖慢落库线程。
     retry-times-when-send-failed: 0

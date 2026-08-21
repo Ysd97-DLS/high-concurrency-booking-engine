@@ -42,4 +42,30 @@ public class ApiExceptionHandler {
         // 这里是「不知道你是谁」。前端据此决定是去登录还是提示无权限。
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
     }
+
+    /**
+     * 客户端输入不合法 → 400，而不是 Spring 默认的 500 + 完整堆栈。
+     *
+     * <p>没有这两个 handler 时，{@code /clinic/identify?patientId=0} 和
+     * {@code /clinic/schedules?date=garbage} 都是 500 —— 和这个类自己批评的
+     * 「认证失败不该是 500」是同一类问题：<b>预期内的客户端错误必须是 4xx</b>，
+     * 500 会打堆栈刷盘、被压测统计成 error、还让前端误以为该重试。
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> badArgument(IllegalArgumentException e) {
+        return badRequest(e.getMessage());
+    }
+
+    @ExceptionHandler(java.time.format.DateTimeParseException.class)
+    public ResponseEntity<Map<String, Object>> badDate(java.time.format.DateTimeParseException e) {
+        return badRequest("日期格式不合法，应为 yyyy-MM-dd：" + e.getParsedString());
+    }
+
+    private static ResponseEntity<Map<String, Object>> badRequest(String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", false);
+        body.put("error", "BAD_REQUEST");
+        body.put("message", message);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
 }
