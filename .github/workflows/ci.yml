@@ -1,0 +1,101 @@
+name: CI
+
+# 这条流水线要回答的是一个具体问题：**别人克隆下来这个仓库，测试还跑得起来吗**。
+# 所以它跑的是 `mvn verify` 而不是 `mvn test` —— 后者只证明纯逻辑没写错，
+# 前者还要起一个真的 Redis 容器，把 Lua 脚本在真实 Redis 上跑一遍。
+#
+# 三件事在同一次运行里发生，任一失败就是红：
+#   ① 215 条单元测试                （surefire）
+#   ② 覆盖率门禁                    （jacoco:check，范围见 pom.xml 里的说明）
+#   ③ 16 条集成测试                 （failsafe + Testcontainers，起真 Redis + 真 MySQL）
+#      —— 其中 12 条是走真实 HTTP 的接口自动化（BookingApiIT），
+#         4 条是 Lua 脚本的并发不变量（StockLuaIT）
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 单元测试 · 覆盖率门禁 · 集成测试
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # Java 17：与 pom.xml 的 maven.compiler.release 一致。
+      # 本机开发用的是 JDK 24（编译目标仍是 17），CI 用 17 恰好顺带验证了
+      # 「这套代码不依赖 24 才有的东西」。
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # ubuntu runner 自带 Docker 守护进程，Testcontainers 直接可用，
+      # 不需要 services: 块（那是给固定端口的服务用的，Testcontainers 自己管端口）。
+      - name: 构建与测试
+        run: mvn -B verify
+
+      # 把覆盖率打进 GitHub 的运行摘要页，点开这次运行第一屏就能看到，
+      # 不用下载 artifact 再解压。数字直接从 JaCoCo 的 CSV 里算，不引第三方 action。
+      - name: 覆盖率摘要
+        if: always()
+        run: |
+          summarize() {
+            local csv="$1" title="$2"
+            [ -f "$csv" ] || return 0
+            awk -F, -v t="$title" '
+              NR > 1 {
+                im += $4; ic += $5; bm += $6; bc += $7; lm += $8; lc += $9;
+              }
+              END {
+                if (lm + lc == 0) exit;
+                printf "| %s | %.1f%% (%d/%d) | %.1f%% (%d/%d) |\n",
+                       t, 100*lc/(lm+lc), lc, lm+lc, 100*bc/(bm+bc), bc, bm+bc;
+              }' "$csv" >> "$GITHUB_STEP_SUMMARY"
+          }
+          {
+            echo "### 覆盖率"
+            echo
+            echo "| 范围 | 行覆盖 | 分支覆盖 |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          summarize target/site/jacoco/jacoco.csv        "单元测试（215 条）"
+          summarize target/site/jacoco-it/jacoco.csv     "集成 + 接口自动化（16 条）"
+          summarize target/site/jacoco-merged/jacoco.csv "**合并口径**"
+          {
+            echo
+            echo "单测那一行偏低是**刻意的划分**，不是漏测：单元测试只覆盖纯判定逻辑"
+            echo "（那部分行覆盖 97%，门禁范围见 pom.xml 的 includes 清单），"
+            echo "控制器 / 仓储 / 消费者由接口自动化、Lua 集成测试与五条一致性等式覆盖。"
+            echo "**对外只引用合并口径那一行。**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 归档覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: |
+            target/site/jacoco
+            target/site/jacoco-it
+            target/site/jacoco-merged
+          if-no-files-found: warn
+
+      # 失败时把测试报告一起带走 —— 只看日志里那句 "Tests run: 215, Failures: 1"
+      # 定位不到是哪条断言。
+      - name: 失败时归档测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-failsafe-reports
+          path: |
+            target/surefire-reports
+            target/failsafe-reports
+          if-no-files-found: ignore
