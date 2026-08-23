@@ -20,6 +20,7 @@
     <properties>
         <!-- 源码保持 Java 17 兼容（简历上写的就是 17），但可以用本机 JDK 24 编译运行 -->
         <maven.compiler.release>17</maven.compiler.release>
+        <jacoco.version>0.8.13</jacoco.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -90,6 +91,32 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 接口自动化。选 RestAssured 而不是 MockMvc：MockMvc 不经过真实的
+             HTTP 栈（不走 Servlet 容器、不做真实的序列化与状态码协商），
+             而这批用例要验的恰恰包括「没有令牌时服务端返回什么状态码」
+             「别人的凭证号打过来回显不回显状态」这类**协议层**行为。 -->
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 抢号是异步落库（Redis Stream → 消费者 → MySQL），断言必须等消费追平。
+             用 Awaitility 而不是 Thread.sleep：固定睡眠要么不够（偶发红）
+             要么过长（每条用例都在等），两种都会让人开始忽略这批测试。 -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 声明它只有一个目的：保证 agent jar 一定被下载进本地仓库，
+             上面 argLine 里那条手写路径才指得到东西。它不参与任何 classpath。 -->
+        <dependency>
+            <groupId>org.jacoco</groupId>
+            <artifactId>org.jacoco.agent</artifactId>
+            <version>${jacoco.version}</version>
+            <classifier>runtime</classifier>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -105,6 +132,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
+                    <argLine>-javaagent:${settings.localRepository}/org/jacoco/org.jacoco.agent/${jacoco.version}/org.jacoco.agent-${jacoco.version}-runtime.jar=destfile=target/jacoco-it.exec,append=false</argLine>
                     <systemPropertyVariables>
                         <!-- Testcontainers 用的 docker-java 默认按 API v1.32 请求，
                              而较新的守护进程 MinAPIVersion 已经是 1.40
@@ -131,6 +159,120 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <!-- 覆盖率。加它的目的不是把数字做好看，而是回答一个具体问题：
+                 「判定逻辑里哪些分支从来没有被任何一条单测走到过」。
+                 覆盖率高不等于测得好（等式③那类缺陷靠行覆盖率发现不了），
+                 但覆盖率低的地方一定没被测过 —— 它只在这个方向上可信。
+
+                 报告：target/site/jacoco/index.html（mvn test 后生成）
+                       target/site/jacoco-it/index.html（mvn verify 后生成，需要 docker）
+
+                 ⚠ 这里**没有用 prepare-agent**，是被迫的，不是偏好：
+                 prepare-agent 会把 destFile 展开成绝对路径再塞进 -javaagent 参数，
+                 而本仓库的绝对路径含中文（D:\后端学习路线…）。Maven 用 GBK 编码子进程
+                 命令行、fork 出的 JVM 按 CP1252 解回，路径当场变成
+                 「D:\ºó¶Ëѧϰ·Ïß20260724\…」—— agent 于是在 D 盘根目录造出一个乱码
+                 目录写进去，**主构建全程不报错**，只在 report 阶段留下一句
+                 「missing execution data file」，很容易被当成插件没生效。
+                 手写 argLine 并使用**相对**的 destfile 后，参数串全是 ASCII，
+                 子进程按自己的工作目录（basedir）落盘，编码问题不复存在。
+                 report 目标跑在 Maven 自己的 JVM 里，不经过命令行，所以照旧用绝对路径。 -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>report-integration</id>
+                        <phase>post-integration-test</phase>
+                        <goals><goal>report-integration</goal></goals>
+                    </execution>
+                    <!-- 合并口径。分开看两份报告会漏掉一件事：一个类可能单测没碰、
+                         集成测试碰了，两边各自看都像「没测」，合起来才是真相。
+                         合并报告是 `mvn verify` 之后唯一该对外引用的那个数字。 -->
+                    <execution>
+                        <id>merge-exec</id>
+                        <phase>post-integration-test</phase>
+                        <goals><goal>merge</goal></goals>
+                        <configuration>
+                            <fileSets>
+                                <fileSet>
+                                    <directory>${project.build.directory}</directory>
+                                    <includes>
+                                        <include>jacoco.exec</include>
+                                        <include>jacoco-it.exec</include>
+                                    </includes>
+                                </fileSet>
+                            </fileSets>
+                            <destFile>${project.build.directory}/jacoco-merged.exec</destFile>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>report-merged</id>
+                        <phase>verify</phase>
+                        <goals><goal>report</goal></goals>
+                        <configuration>
+                            <dataFile>${project.build.directory}/jacoco-merged.exec</dataFile>
+                            <outputDirectory>${project.reporting.outputDirectory}/jacoco-merged</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <!-- 门禁。作用是「不许再退步」，不是「必须达到某个行业标准」。
+                         阈值取实测值下方一档（实测行 97.1% / 分支 96.4%，门槛定 95% / 93%）。
+
+                         范围限定在**纯判定逻辑类**：不碰 IO、不依赖 Spring 容器、
+                         输入输出都是值，因而「没被单测走到」这件事一定是测试的欠缺。
+                         控制器、仓储、消费者、配置那些只有起了 Redis/MySQL 才走得到的代码
+                         不在这里 —— 它们由 Testcontainers 集成测试、压测与五条一致性等式覆盖，
+                         拿单测覆盖率去要求它们只会逼出为覆盖率而写的假测试。
+                         **全仓库行覆盖 9.3% 是这个划分的结果，不是漏测**，
+                         数字本身写在 README 里，不藏。 -->
+                    <execution>
+                        <id>check</id>
+                        <phase>test</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <!-- ⚠ 这一层 includes 是 class 文件模式，作用是**限定纳入统计的类**。
+                                 别写成 rule 里的 includes：那一层过滤的是 element 名字，
+                                 而 element 是 BUNDLE 时名字只有一个（"flashpilot"），
+                                 列一串类名等于一个都匹配不上 —— 规则会静默地什么都不检查，
+                                 阈值调到 0.99 依然 BUILD SUCCESS。这个坑踩过一次。 -->
+                            <includes>
+                                <include>**/ApptStatus*.class</include>
+                                <include>**/Appointment.class</include>
+                                <include>**/PatientToken*.class</include>
+                                <include>**/CountMinSketch*.class</include>
+                                <include>**/ReconcileDecider*.class</include>
+                                <include>**/GuardDecider*.class</include>
+                                <include>**/ConfigParam*.class</include>
+                                <include>**/McpProtocol*.class</include>
+                                <include>**/TailModeGate*.class</include>
+                            </includes>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.95</minimum></limit>
+                                        <limit><counter>BRANCH</counter><value>COVEREDRATIO</value><minimum>0.93</minimum></limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- 手写 agent：destfile 必须相对，理由见上面 jacoco 那段注释。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-javaagent:${settings.localRepository}/org/jacoco/org.jacoco.agent/${jacoco.version}/org.jacoco.agent-${jacoco.version}-runtime.jar=destfile=target/jacoco.exec,append=false</argLine>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
