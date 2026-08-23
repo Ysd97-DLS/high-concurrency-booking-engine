@@ -25,6 +25,9 @@ public class SecurityConfig {
     static final String[] GUARDED = {
             "/admin/*",
             "/verify/*",
+            // 探针返回的是内部状态的原始量（号源在谁手里、消息链路各段的计数），
+            // 和 /verify 同级别，同样只对运维面开放。
+            "/probe/*",
             "/control/*",
             "/mcp",
             "/mcp/*",
