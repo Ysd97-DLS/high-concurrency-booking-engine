@@ -167,6 +167,28 @@ public class OrderPersistService {
             patientIds.add(e.holderId());
         }
         java.util.Set<Long> holding = appts.findHoldingPatients(poolId, patientIds);
+        Verdict verdict = classify(inserted, notInserted, holding);
+        if (!verdict.failed().isEmpty()) {
+            log.error("有 {} 条既没插入也查不到已有单，交回重试（poolId={} 待查证={} 本批插入={} 重复={}）",
+                    verdict.failed().size(), poolId, notInserted.size(), inserted, verdict.duplicate());
+        }
+        return verdict;
+    }
+
+    /**
+     * 「没插进去」到底是真重复还是真失败 —— 判定规则本身，不碰数据库。
+     *
+     * <p>单独抽出来是为了让它能被断言。原先这段判定长在 {@code classifyNotInserted}
+     * 里、被 JdbcTemplate 与 {@code @Transactional} 缠着，单测只能在测试类里复刻一份
+     * 同形状的逻辑，于是<b>七条断言与产线代码零耦合</b>：产线把
+     * {@code Math.max(0, duplicate - inserted)} 那步删掉，测试一条都不会红。
+     * 引入 JaCoCo 后这件事直接显形（测试全绿而该包行覆盖为 0），才做了这次抽取。
+     *
+     * @param inserted    本批真正插进去的行数
+     * @param notInserted 待查证的事件（INSERT IGNORE 不告诉是哪几行，所以整批都在这里）
+     * @param holding     这批患者里，当前在库中已有占号单的那些
+     */
+    static Verdict classify(int inserted, List<OrderEvent> notInserted, java.util.Set<Long> holding) {
         List<String> failed = new java.util.ArrayList<>();
         int duplicate = 0;
         for (OrderEvent e : notInserted) {
@@ -178,10 +200,6 @@ public class OrderPersistService {
         }
         // holding 里含了本批刚插进去的那些（它们现在也「有占号单」），扣掉才是真正被挡掉的。
         duplicate = Math.max(0, duplicate - inserted);
-        if (!failed.isEmpty()) {
-            log.error("有 {} 条既没插入也查不到已有单，交回重试（poolId={} 待查证={} 本批插入={} 重复={}）",
-                    failed.size(), poolId, notInserted.size(), inserted, duplicate);
-        }
         return new Verdict(duplicate, failed);
     }
 }

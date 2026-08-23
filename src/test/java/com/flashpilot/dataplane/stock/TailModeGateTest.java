@@ -13,10 +13,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 尾部模式重新评估的判据。
  *
- * <p>这里测的不是 {@link LocalSegmentManager} 本体（它需要 Redis），而是那个判据的**形状**：
- * 「到点了才查、查一次就把下次时间推后、余量够就退出」。
+ * <p>断言的是 {@link TailModeGate} 本身 —— 也就是 {@link LocalSegmentManager} 生产路径上
+ * 真正会执行的那两个纯函数。中间那次 Redis 读取留在调用方，由集成测试覆盖。
  *
- * <h2>为什么这条值得单独测</h2>
+ * <h2>这个测试类曾经是「假绿灯」，值得记下来</h2>
+ *
+ * 原先它在测试类内部<b>复刻</b>了一份同样形状的判据来断言。七条测试全绿，
+ * 却与产线代码零耦合：把产线的 {@code bucketSum > tail} 改成 {@code >=}，
+ * 一条都不会红。引入 JaCoCo 后这件事一眼可见 —— <b>七条测试通过，而
+ * {@code com.flashpilot.dataplane.stock} 的行覆盖是 0</b>。
+ * 判据于是被抽进 {@link TailModeGate}，测试改为直接驱动它。
+ *
+ * <h2>为什么这条判据值得单独测</h2>
  *
  * 尾部模式原来是<b>单向闩锁</b>：桶余量跌破阈值就永久为 true。抽象秒杀域里这是对的
  * —— 库存只减不增。但挂号域会往回加号：退号、超时释放、对账补偿，以及<b>分批放号</b>
@@ -34,14 +42,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TailModeGateTest {
 
-    /** 复刻 LocalSegmentManager 里那段判据，输入输出都是数，可直接断言。 */
+    /**
+     * 只负责按生产顺序调用 {@link TailModeGate} 的两个函数并数一数探测次数，
+     * <b>不复刻任何判据</b> —— 判据全在被测类里。
+     */
     private static final class Gate {
         final AtomicLong recheckAt = new AtomicLong(0);
         final AtomicInteger probes = new AtomicInteger();   // 真的"查 Redis"了几次
         boolean tailMode = true;
-        long intervalMs;
-        int bucketSum;
-        int threshold;
+        final long intervalMs;
+        final int bucketSum;
+        final int threshold;
 
         Gate(long intervalMs, int bucketSum, int threshold) {
             this.intervalMs = intervalMs;
@@ -51,12 +62,11 @@ class TailModeGateTest {
 
         /** @return true 表示已退出尾部模式 */
         boolean tryLeave(long now) {
-            long due = recheckAt.get();
-            if (now < due || !recheckAt.compareAndSet(due, now + intervalMs)) {
+            if (!TailModeGate.claimProbe(recheckAt, now, intervalMs)) {
                 return false;
             }
-            probes.incrementAndGet();
-            if (bucketSum > threshold) {
+            probes.incrementAndGet();                       // 这一步在生产里是一次 stats 调用
+            if (TailModeGate.stockRecovered(bucketSum, threshold)) {
                 tailMode = false;
                 return true;
             }
@@ -83,12 +93,12 @@ class TailModeGateTest {
     @Test
     @DisplayName("恰好等于阈值不退出——阈值是「低于等于就进尾部」的闭区间")
     void thresholdIsInclusive() {
+        assertFalse(TailModeGate.stockRecovered(50, 50));
+        assertTrue(TailModeGate.stockRecovered(51, 50));
+
         Gate g = new Gate(1000, 50, 50);
         assertFalse(g.tryLeave(10_000));
         assertTrue(g.tailMode);
-        // 超过一个就该退出
-        Gate g2 = new Gate(1000, 51, 50);
-        assertTrue(g2.tryLeave(10_000));
     }
 
     @Test

@@ -213,14 +213,14 @@ public class LocalSegmentManager {
      */
     private boolean tryLeaveTailMode(ItemState st) {
         long now = System.currentTimeMillis();
-        long due = st.tailRecheckAt.get();
-        if (now < due || !st.tailRecheckAt.compareAndSet(due, now + TAIL_RECHECK_MS)) {
+        // 两条判据都在 TailModeGate 里（纯函数，产线与单测共用同一份实现）。
+        if (!TailModeGate.claimProbe(st.tailRecheckAt, now, TAIL_RECHECK_MS)) {
             return false;
         }
         try {
             int tail = hotConfig.getInt(ConfigParam.TAIL_THRESHOLD);
             int bucketSum = stockRedis.stats(st.poolId).bucketSum();
-            if (bucketSum > tail) {
+            if (TailModeGate.stockRecovered(bucketSum, tail)) {
                 st.tailMode = false;
                 st.soldOutUntil = 0L;      // 库存回来了，之前的"售罄"判断也该失效
                 log.info("退出尾部单件模式 poolId={} 桶剩余={} 阈值={} —— 库存已回补（退号/放号/对账）",

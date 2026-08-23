@@ -20,29 +20,25 @@ import org.junit.jupiter.api.Test;
  * 于是真失败的消息被 ACK 掉、号从 Redis 扣走却没有单、不重试也不进死信。
  * P6 Redis 主从切换时这样丢了 19389 个号，而日志一片干净。
  *
- * <p>这里不接数据库，只测那段判定逻辑：给定「插了几行」和「哪些患者已有占号单」，
- * 应该得出多少重复、多少失败。逻辑用一个和产线同构的本地实现表达，
- * 因为产线那段被 {@code @Transactional} 和 JdbcTemplate 缠着，
- * 而<b>要钉住的是判定规则本身，不是 Spring 的接线</b>。
+ * <p>这里不接数据库，直接驱动产线的 {@link OrderPersistService#classify}：给定「插了几行」
+ * 和「哪些患者已有占号单」，应该得出多少重复、多少失败。查库那一步留在调用方，
+ * 因为<b>要钉住的是判定规则本身，不是 Spring 的接线</b>。
+ *
+ * <p>⚠ 这批断言原先跑在测试类内部的一份<b>同构复刻</b>上，与产线代码零耦合：
+ * 产线把 {@code Math.max(0, duplicate - inserted)} 删掉，七条断言一条都不会红。
+ * 引入 JaCoCo 后这件事一眼可见 —— 测试全绿而 {@code com.flashpilot.dataplane.order}
+ * 的行覆盖只有那几个 record。判定规则于是被抽成产线的静态方法，测试改为直接调它。
  */
 class PersistBatchOutcomeTest {
 
-    /** 和 {@code OrderPersistService.persistBatch} 里那段判定同构。 */
+    /**
+     * 调产线的判定方法，只补上 persistBatch 那一步的快路径语义：
+     * 整批都插进去时待查证列表为空，查证根本不会发生。
+     */
     private static Outcome classify(List<OrderEvent> events, int inserted, Set<Long> holding) {
-        if (inserted == events.size()) {
-            return new Outcome(inserted, 0, List.of());
-        }
-        List<String> failed = new ArrayList<>();
-        int duplicate = 0;
-        for (OrderEvent e : events) {
-            if (holding.contains(e.holderId())) {
-                duplicate++;
-            } else {
-                failed.add(e.eventId());
-            }
-        }
-        duplicate = Math.max(0, duplicate - inserted);
-        return new Outcome(inserted, duplicate, failed);
+        List<OrderEvent> notInserted = inserted == events.size() ? List.of() : events;
+        var v = OrderPersistService.classify(inserted, notInserted, holding);
+        return new Outcome(inserted, v.duplicate(), v.failed());
     }
 
     private record Outcome(int inserted, int duplicate, List<String> failed) {
